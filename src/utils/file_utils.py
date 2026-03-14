@@ -1,9 +1,12 @@
 """File handling utilities for OpenRAG"""
 
 import os
+import re
 import tempfile
+import unicodedata
 from contextlib import contextmanager
 from typing import Optional
+from uuid import uuid4
 
 
 @contextmanager
@@ -76,6 +79,42 @@ def get_file_extension(mimetype: str) -> str:
         "application/vnd.google-apps.spreadsheet": ".pdf",
     }
     return mime_to_ext.get(mimetype, ".bin")
+
+
+def _transliterate_cyrillic(text: str) -> str:
+    """Transliterate basic Russian Cyrillic to Latin. Other chars unchanged."""
+    mapping = {
+        "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
+        "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m",
+        "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u",
+        "ф": "f", "х": "h", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sch",
+        "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya",
+    }
+    return "".join(mapping.get(c.lower(), c) for c in text)
+
+
+def make_safe_storage_filename(filename: str) -> str:
+    """
+    Produce an ASCII-only storage filename for Langflow/ingestion.
+    Allowed chars: a-z A-Z 0-9 . _ -
+    Spaces -> _, Cyrillic transliterated, other non-ASCII replaced or fallback to file_<uuid>.ext
+    """
+    if not filename or not filename.strip():
+        return f"file_{uuid4().hex}.bin"
+    base, ext = os.path.splitext(filename)
+    base = base.replace(" ", "_")
+    base = _transliterate_cyrillic(base)
+    base_ascii = base.encode("ascii", "replace").decode("ascii")
+    base_ascii = re.sub(r"[^a-zA-Z0-9._-]+", "_", base_ascii)
+    base_ascii = re.sub(r"_+", "_", base_ascii).strip("._-")
+    ext_ascii = _transliterate_cyrillic(ext)
+    ext_ascii = ext_ascii.encode("ascii", "replace").decode("ascii")
+    ext_ascii = re.sub(r"[^a-zA-Z0-9.]+", "", ext_ascii)
+    if not ext_ascii or not ext_ascii.startswith("."):
+        ext_ascii = ".bin"
+    if not base_ascii:
+        base_ascii = f"file_{uuid4().hex}"
+    return base_ascii + ext_ascii
 
 
 def clean_connector_filename(filename: str, mimetype: str) -> str:

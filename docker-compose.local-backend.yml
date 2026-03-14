@@ -1,0 +1,13 @@
+services:
+  openrag-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./src:/app/src
+      - ./flows:/app/flows
+      - ./openrag-documents:/app/openrag-documents
+    ports:
+      - "8000:8000"

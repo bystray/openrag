@@ -1,7 +1,11 @@
 from typing import Any
 from .tasks import UploadTask, FileTask
 from utils.logging_config import get_logger
-from utils.file_utils import get_file_extension, clean_connector_filename
+from utils.file_utils import (
+    clean_connector_filename,
+    get_file_extension,
+    make_safe_storage_filename,
+)
 
 logger = get_logger(__name__)
 
@@ -764,14 +768,15 @@ class LangflowFileProcessor(TaskProcessor):
                 content_type = 'application/octet-stream'
 
             # Rename .txt to .md for Langflow compatibility
-            # Langflow has issues processing text/plain files
             langflow_filename = original_filename
             if original_filename.lower().endswith('.txt'):
                 langflow_filename = original_filename[:-4] + '.md'
                 content_type = 'text/markdown'
                 logger.debug(f"Renamed {original_filename} to {langflow_filename} for Langflow")
 
-            file_tuple = (langflow_filename, content, content_type)
+            # Use ASCII-safe storage filename for Langflow (path/headers); keep original for UI/metadata
+            safe_storage_filename = make_safe_storage_filename(langflow_filename)
+            file_tuple = (safe_storage_filename, content, content_type)
 
             # Get JWT token using same logic as DocumentFileProcessor
             # This will handle anonymous JWT creation if needed
@@ -789,7 +794,7 @@ class LangflowFileProcessor(TaskProcessor):
             # Prepare metadata tweaks similar to API endpoint
             final_tweaks = self.tweaks.copy() if self.tweaks else {}
 
-            # Process file using langflow service
+            # Process file using langflow service (safe name in tuple; original for metadata/UI)
             result = await self.langflow_file_service.upload_and_ingest_file(
                 file_tuple=file_tuple,
                 session_id=self.session_id,
@@ -801,7 +806,7 @@ class LangflowFileProcessor(TaskProcessor):
                 owner_name=self.owner_name,
                 owner_email=self.owner_email,
                 connector_type="local",
-
+                original_filename_for_metadata=original_filename,
             )
 
             # Update task with success

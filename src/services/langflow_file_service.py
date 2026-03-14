@@ -94,6 +94,7 @@ class LangflowFileService:
         source_url: Optional[str] = None,
         allowed_users: Optional[List[str]] = None,
         allowed_groups: Optional[List[str]] = None,
+        original_filenames: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Trigger the ingestion flow with provided file paths.
@@ -145,9 +146,17 @@ class LangflowFileService:
         file_size_bytes = len(file_tuples[0][1]) if file_tuples and len(file_tuples[0]) > 1 else 0
         # Avoid logging full payload to prevent leaking sensitive data (e.g., JWT)
 
-        # Extract file metadata if file_tuples is provided
-        filename = str(file_tuples[0][0]) if file_tuples and len(file_tuples) > 0 else ""
+        # Extract file metadata if file_tuples is provided (filename here is safe ASCII for Langflow)
+        safe_storage_filename = str(file_tuples[0][0]) if file_tuples and len(file_tuples) > 0 else ""
+        filename = safe_storage_filename
         mimetype = str(file_tuples[0][2]) if file_tuples and len(file_tuples) > 0 and len(file_tuples[0]) > 2 else ""
+
+        logger.debug(
+            "[LF] Ingestion path: original_filename=%s, safe_storage_filename=%s, final file_path sent to Langflow=%s",
+            original_filenames[0] if original_filenames else "(none)",
+            safe_storage_filename,
+            file_paths,
+        )
 
         # Get the current embedding model and provider credentials from config
         from config.settings import get_openrag_config
@@ -169,6 +178,11 @@ class LangflowFileService:
             "X-Langflow-Global-Var-DOCUMENT_ID": str(document_id) if document_id else "",
             "X-Langflow-Global-Var-SOURCE_URL": str(source_url) if source_url else "",
         }
+        if original_filenames and len(original_filenames) > 0:
+            _orig_val = str(original_filenames[0])
+            # HTTP headers must be ASCII; skip ORIGINAL_FILENAME when value contains non-ASCII to avoid UnicodeEncodeError
+            if all(ord(c) < 128 for c in _orig_val):
+                headers["X-Langflow-Global-Var-ORIGINAL_FILENAME"] = _orig_val
 
         # Serialize ACL lists as JSON strings for Langflow global vars
         # (flows will parse these back into lists before indexing)
@@ -183,8 +197,8 @@ class LangflowFileService:
         
         # Add provider credentials as global variables for ingestion
         add_provider_credentials_to_headers(headers, config)
-        logger.info(f"[LF] Headers {headers}")
-        logger.info(f"[LF] Payload {payload}")
+        logger.debug("[LF] Headers %s", headers)
+        logger.debug("[LF] Payload %s", payload)
         resp = await clients.langflow_request(
             "POST",
             f"/api/v1/run/{self.flow_id_ingest}",
@@ -473,7 +487,8 @@ class LangflowFileService:
         owner: Optional[str] = None,
         owner_name: Optional[str] = None,
         owner_email: Optional[str] = None,
-        connector_type: Optional[str] = None,   
+        connector_type: Optional[str] = None,
+        original_filename_for_metadata: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Combined upload, ingest, and delete operation.
@@ -512,6 +527,14 @@ class LangflowFileService:
         file_path = upload_result.get("path")
         if not file_path:
             raise ValueError("Upload successful but no file path returned")
+
+        safe_storage_filename = file_tuple[0] if file_tuple else ""
+        logger.debug(
+            "[LF] Upload result: original_filename=%s, safe_storage_filename=%s, final file_path sent to Langflow=%s",
+            original_filename_for_metadata,
+            safe_storage_filename,
+            file_path,
+        )
 
         # Convert UI settings to component tweaks if provided
         final_tweaks = tweaks.copy() if tweaks else {}
@@ -553,7 +576,7 @@ class LangflowFileService:
                 extra={"tweaks": final_tweaks},
             )
 
-        # Step 3: Run ingestion
+        # Step 3: Run ingestion (file_path and file_tuple use safe ASCII names for Langflow)
         try:
             ingest_result = await self.run_ingestion_flow(
                 file_paths=[file_path],
@@ -565,6 +588,7 @@ class LangflowFileService:
                 owner_name=owner_name,
                 owner_email=owner_email,
                 connector_type=connector_type,
+                original_filenames=[original_filename_for_metadata] if original_filename_for_metadata else None,
             )
             logger.debug("[LF] Ingestion completed successfully")
         except Exception as e:
