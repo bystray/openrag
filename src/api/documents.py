@@ -19,8 +19,9 @@ async def delete_documents_by_filename_core(
     user_id: str,
     jwt_token: str | None,
 ):
-    """Shared delete-by-filename logic for v1 and non-v1 endpoints."""
+    """Shared delete-by-filename logic for v1 and non-v1 endpoints. Uses safe storage name (index stores FILENAME from flow)."""
     from config.settings import get_index_name
+    from utils.file_utils import make_safe_storage_filename
     from utils.opensearch_queries import build_filename_delete_body
 
     normalized_filename = (filename or "").strip()
@@ -36,11 +37,12 @@ async def delete_documents_by_filename_core(
             400,
         )
 
+    safe_name = make_safe_storage_filename(normalized_filename)
     try:
         opensearch_client = session_manager.get_user_opensearch_client(
             user_id, jwt_token
         )
-        delete_query = build_filename_delete_body(normalized_filename)
+        delete_query = build_filename_delete_body(safe_name)
         result = await opensearch_client.delete_by_query(
             index=get_index_name(),
             body=delete_query,
@@ -110,21 +112,22 @@ async def check_filename_exists(
     session_manager=Depends(get_session_manager),
     user: User = Depends(get_current_user),
 ):
-    """Check if a document with a specific filename already exists"""
+    """Check if a document with a specific filename already exists. Uses safe storage name for search (index stores FILENAME from flow)."""
     from config.settings import get_index_name
+    from utils.file_utils import make_safe_storage_filename
+    from utils.opensearch_queries import build_filename_search_body
 
     jwt_token = user.jwt_token
+    safe_name = make_safe_storage_filename(filename or "")
 
     try:
         opensearch_client = session_manager.get_user_opensearch_client(
             user.user_id, jwt_token
         )
 
-        from utils.opensearch_queries import build_filename_search_body
+        search_body = build_filename_search_body(safe_name, size=1, source=["filename"])
 
-        search_body = build_filename_search_body(filename, size=1, source=["filename"])
-
-        logger.debug("Checking filename existence", filename=filename, index_name=get_index_name())
+        logger.debug("Checking filename existence", filename=filename, safe_name=safe_name, index_name=get_index_name())
 
         try:
             response = await opensearch_client.search(

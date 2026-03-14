@@ -353,7 +353,9 @@ export function KnowledgeDropdown() {
       const nonDuplicateFiles = duplicateResults
         .filter((r) => !r.isDuplicate)
         .map((r) => r.file);
-      const skippedCount = duplicateResults.filter((r) => r.isDuplicate).length;
+      const skippedDuplicates = duplicateResults.filter((r) => r.isDuplicate);
+      const skippedCount = skippedDuplicates.length;
+      const skippedNames = skippedDuplicates.map((r) => r.file.name);
 
       if (skippedCount > 0) {
         console.log(
@@ -362,7 +364,15 @@ export function KnowledgeDropdown() {
       }
 
       if (nonDuplicateFiles.length === 0) {
-        toast.info("All files already exist, nothing to upload.");
+        const totalInFolder = cleanFiles.length;
+        const alreadyInKb = skippedCount;
+        const notAddedList =
+          skippedNames.length <= 10
+            ? skippedNames.join(", ")
+            : `${skippedNames.slice(0, 10).join(", ")} и ещё ${skippedNames.length - 10}`;
+        toast.info("Все файлы уже есть в базе знаний", {
+          description: `В папке: ${totalInFolder} файл(ов). Уже в базе знаний: ${alreadyInKb}. Не добавлены (дубликаты): ${notAddedList}`,
+        });
         return;
       }
 
@@ -395,12 +405,23 @@ export function KnowledgeDropdown() {
 
       refetchTasks();
 
-      const processedCount = nonDuplicateFiles.length;
-      const message =
-        skippedCount > 0
-          ? `Processed ${processedCount} file(s), skipped ${skippedCount} duplicate(s)`
-          : `Successfully processed ${processedCount} file(s)`;
-      toast.success(message);
+      const totalInFolder = cleanFiles.length;
+      const alreadyInKb = skippedCount;
+      const addedCount = nonDuplicateFiles.length;
+      const notAddedList =
+        skippedNames.length <= 10
+          ? skippedNames.join(", ")
+          : `${skippedNames.slice(0, 10).join(", ")} и ещё ${skippedNames.length - 10}`;
+      const summary =
+        alreadyInKb > 0
+          ? `В папке: ${totalInFolder} файл(ов). Уже в базе знаний: ${alreadyInKb}. Добавлено: ${addedCount}. Не добавлены (дубликаты): ${notAddedList}`
+          : `Успешно обработано ${addedCount} файл(ов)`;
+      toast.success(
+        alreadyInKb > 0
+          ? `Добавлено ${addedCount} из ${totalInFolder}, пропущено дубликатов: ${alreadyInKb}`
+          : `Успешно обработано ${addedCount} файл(ов)`,
+        { description: alreadyInKb > 0 ? summary : undefined },
+      );
     } catch (error) {
       console.error("Folder upload error:", error);
       toast.error("Folder upload failed", {

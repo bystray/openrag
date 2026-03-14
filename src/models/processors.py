@@ -735,27 +735,28 @@ class LangflowFileProcessor(TaskProcessor):
 
         try:
             # Use the ORIGINAL filename stored in file_task (not the transformed temp path)
-            # This ensures we check/store the original filename with spaces, etc.
             original_filename = file_task.filename or os.path.basename(item)
+            # Index stores FILENAME (safe ASCII); check/delete must use the same key
+            langflow_filename = original_filename
+            if original_filename.lower().endswith('.txt'):
+                langflow_filename = original_filename[:-4] + '.md'
+            safe_name = make_safe_storage_filename(langflow_filename)
 
-            # Check if document with same filename already exists
             opensearch_client = self.session_manager.get_user_opensearch_client(
                 self.owner_user_id, self.jwt_token
             )
 
-            filename_exists = await self.check_filename_exists(original_filename, opensearch_client)
+            filename_exists = await self.check_filename_exists(safe_name, opensearch_client)
 
             if filename_exists and not self.replace_duplicates:
-                # Duplicate exists and user hasn't confirmed replacement
                 file_task.status = TaskStatus.FAILED
                 file_task.error = f"File with name '{original_filename}' already exists"
                 file_task.updated_at = time.time()
                 upload_task.failed_files += 1
                 return
             elif filename_exists and self.replace_duplicates:
-                # Delete existing document before uploading new one
                 logger.info(f"Replacing existing document: {original_filename}")
-                await self.delete_document_by_filename(original_filename, opensearch_client)
+                await self.delete_document_by_filename(safe_name, opensearch_client)
 
             # Read file content for processing
             with open(item, 'rb') as f:
@@ -767,16 +768,12 @@ class LangflowFileProcessor(TaskProcessor):
             if not content_type:
                 content_type = 'application/octet-stream'
 
-            # Rename .txt to .md for Langflow compatibility
-            langflow_filename = original_filename
             if original_filename.lower().endswith('.txt'):
-                langflow_filename = original_filename[:-4] + '.md'
                 content_type = 'text/markdown'
                 logger.debug(f"Renamed {original_filename} to {langflow_filename} for Langflow")
 
             # Use ASCII-safe storage filename for Langflow (path/headers); keep original for UI/metadata
-            safe_storage_filename = make_safe_storage_filename(langflow_filename)
-            file_tuple = (safe_storage_filename, content, content_type)
+            file_tuple = (safe_name, content, content_type)
 
             # Get JWT token using same logic as DocumentFileProcessor
             # This will handle anonymous JWT creation if needed

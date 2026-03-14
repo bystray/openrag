@@ -28,7 +28,7 @@ async def upload_ingest_router(
     settings_json: Optional[str] = Form(None, alias="settings"),
     tweaks_json: Optional[str] = Form(None, alias="tweaks"),
     delete_after_ingest: str = Form("true"),
-    replace_duplicates: str = Form("true"),
+    replace_duplicates: str = Form("false"),
     create_filter: str = Form("false"),
     document_service=Depends(get_document_service),
     langflow_file_service=Depends(get_langflow_file_service),
