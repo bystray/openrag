@@ -7,11 +7,18 @@ import {
   type ValueFormatterParams,
 } from "ag-grid-community";
 import { AgGridReact } from "ag-grid-react";
-import { ClipboardList } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Loader2, FileSearch } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { ProtectedRoute } from "@/components/protected-route";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   Sheet,
@@ -27,7 +34,10 @@ import {
   formatWeightKg,
   EMPTY,
 } from "@/app/logistics-requests/format";
-import type { LogisticsRequest } from "@/app/logistics-requests/types";
+import type {
+  LogisticsRequest,
+  ExtractResponse,
+} from "@/app/logistics-requests/types";
 import { useLogisticsRequestByIdQuery } from "@/app/api/queries/useLogisticsRequestByIdQuery";
 import { useLogisticsRequestsQuery } from "@/app/api/queries/useLogisticsRequestsQuery";
 import "@/components/AgGrid/registerAgGridModules";
@@ -62,6 +72,12 @@ function LogisticsRequestsPageContent() {
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(
     null,
   );
+  const [extractLoading, setExtractLoading] = useState(false);
+  const [extractResult, setExtractResult] = useState<
+    (ExtractResponse & { error?: string }) | null
+  >(null);
+
+  const queryClient = useQueryClient();
 
   const params = useMemo(
     () => ({
@@ -193,12 +209,89 @@ function LogisticsRequestsPageContent() {
     if (id) setSelectedDocumentId(id);
   }, []);
 
+  const runExtract = useCallback(async () => {
+    setExtractLoading(true);
+    setExtractResult(null);
+    try {
+      const res = await fetch("/api/logistics-requests/extract", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          limit: null,
+          force: false,
+          dry_run: false,
+          filename: null,
+        }),
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setExtractResult({
+          status: "error",
+          started: true,
+          mode: "batch",
+          limit: null,
+          force: false,
+          dry_run: false,
+          filename: null,
+          summary: {
+            found_candidates: 0,
+            processed: 0,
+            success: 0,
+            skipped: 0,
+            failed: 0,
+          },
+          items: [],
+          error: (data as { error?: string }).error ?? "Ошибка запуска извлечения",
+        } as ExtractResponse & { error?: string });
+      } else {
+        setExtractResult(data as ExtractResponse);
+        await queryClient.invalidateQueries({ queryKey: ["logistics-requests"] });
+      }
+    } catch (err) {
+      setExtractResult({
+        status: "error",
+        started: true,
+        mode: "batch",
+        limit: null,
+        force: false,
+        dry_run: false,
+        filename: null,
+        summary: {
+          found_candidates: 0,
+          processed: 0,
+          success: 0,
+          skipped: 0,
+          failed: 0,
+        },
+        items: [],
+        error: err instanceof Error ? err.message : "Ошибка сети",
+      } as ExtractResponse & { error?: string });
+    } finally {
+      setExtractLoading(false);
+    }
+  }, [queryClient]);
+
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-semibold">Логистические заявки</h2>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={extractLoading}
+          onClick={runExtract}
+          className="gap-2"
+        >
+          {extractLoading ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <FileSearch className="h-4 w-4" />
+          )}
+          Извлечь заявки из базы знаний
+        </Button>
       </div>
 
       {/* Фильтры */}
@@ -472,6 +565,91 @@ function LogisticsRequestsPageContent() {
           </div>
         </div>
       )}
+
+      {/* Диалог результата извлечения */}
+      <Dialog
+        open={!!extractResult}
+        onOpenChange={(open) => !open && setExtractResult(null)}
+      >
+        <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle>
+              {extractResult?.error
+                ? "Ошибка извлечения"
+                : "Результат извлечения заявок"}
+            </DialogTitle>
+          </DialogHeader>
+          {extractResult?.error ? (
+            <p className="text-sm text-destructive">{extractResult.error}</p>
+          ) : extractResult ? (
+            <div className="flex flex-col gap-4 overflow-hidden">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-sm">
+                <div className="rounded bg-muted/50 p-2">
+                  <span className="text-muted-foreground">Найдено кандидатов</span>
+                  <p className="font-semibold">{extractResult.summary.found_candidates}</p>
+                </div>
+                <div className="rounded bg-muted/50 p-2">
+                  <span className="text-muted-foreground">Обработано</span>
+                  <p className="font-semibold">{extractResult.summary.processed}</p>
+                </div>
+                <div className="rounded bg-green-500/10 p-2">
+                  <span className="text-muted-foreground">Успешно</span>
+                  <p className="font-semibold text-green-600 dark:text-green-400">
+                    {extractResult.summary.success}
+                  </p>
+                </div>
+                <div className="rounded bg-muted/50 p-2">
+                  <span className="text-muted-foreground">Пропущено</span>
+                  <p className="font-semibold">{extractResult.summary.skipped}</p>
+                </div>
+                <div className="rounded bg-destructive/10 p-2">
+                  <span className="text-muted-foreground">Ошибки</span>
+                  <p className="font-semibold text-destructive">
+                    {extractResult.summary.failed}
+                  </p>
+                </div>
+              </div>
+              {extractResult.dry_run && (
+                <p className="text-xs text-muted-foreground">
+                  Режим «без записи» (dry run) — в индекс ничего не записано.
+                </p>
+              )}
+              {extractResult.items.length > 0 && (
+                <div className="flex-1 min-h-0 overflow-auto">
+                  <p className="text-xs text-muted-foreground mb-2">По файлам:</p>
+                  <ul className="space-y-1 text-sm max-h-60 overflow-y-auto pr-2">
+                    {extractResult.items.map((item, i) => (
+                      <li
+                        key={`${item.filename}-${i}`}
+                        className="flex justify-between gap-2 py-1 border-b border-border/50 last:border-0"
+                      >
+                        <span className="truncate" title={item.filename}>
+                          {item.filename}
+                        </span>
+                        <span
+                          className={
+                            item.status === "success"
+                              ? "text-green-600 dark:text-green-400"
+                              : item.status === "skipped"
+                                ? "text-muted-foreground"
+                                : "text-destructive"
+                          }
+                        >
+                          {item.status === "success"
+                            ? "успешно"
+                            : item.status === "skipped"
+                              ? "пропущен"
+                              : "ошибка"}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
 
       {/* Drawer карточки заявки */}
       <Sheet

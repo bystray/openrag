@@ -1419,6 +1419,12 @@ async def create_app():
         methods=["GET"],
         tags=["internal"],
     )
+    app.add_api_route(
+        "/logistics-requests/extract",
+        logistics_requests.extract_logistics_requests,
+        methods=["POST"],
+        tags=["internal"],
+    )
 
     # Knowledge Filter endpoints
     app.add_api_route(

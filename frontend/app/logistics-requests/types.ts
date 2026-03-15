@@ -61,3 +61,36 @@ export interface LogisticsAggregations {
   unique_carriers: number;
   unique_routes: number;
 }
+
+/** Параметры запроса извлечения заявок из базы знаний */
+export interface ExtractParams {
+  limit?: number | null;
+  force?: boolean;
+  dry_run?: boolean;
+  filename?: string | null;
+}
+
+/** Итог по одному файлу в ответе extract */
+export interface ExtractItem {
+  filename: string;
+  status: "success" | "skipped" | "failed";
+}
+
+/** Ответ API POST /logistics-requests/extract */
+export interface ExtractResponse {
+  status: string;
+  started: boolean;
+  mode: "single" | "batch";
+  limit: number | null;
+  force: boolean;
+  dry_run: boolean;
+  filename: string | null;
+  summary: {
+    found_candidates: number;
+    processed: number;
+    success: number;
+    skipped: number;
+    failed: number;
+  };
+  items: ExtractItem[];
+}
