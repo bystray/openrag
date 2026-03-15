@@ -18,6 +18,7 @@ flowchart TB
         ChatService[ChatService]
         DocService[DocumentService]
         ConnectorAPI[Connectors API]
+        LogisticsAPI[Logistics API /extract]
     end
 
     subgraph Langflow["Langflow"]
@@ -32,6 +33,7 @@ flowchart TB
 
     subgraph OpenSearch["OpenSearch"]
         Index[(Индекс documents)]
+        LogisticsIndex[(Индекс logistics_requests_structured)]
     end
 
     subgraph Connectors["Коннекторы"]
@@ -49,6 +51,8 @@ flowchart TB
     IngestFlow --> Index
     ChatFlow --> Index
     SearchService --> Index
+    LogisticsAPI --> Index
+    LogisticsAPI --> LogisticsIndex
     Backend --> ConnectorAPI
     ConnectorAPI --> Connectors
     TaskService --> Langflow

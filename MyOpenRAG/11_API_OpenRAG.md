@@ -34,6 +34,13 @@ REST API Backend (FastAPI), через который Frontend и внешние
 
 - Проверка доступности Docling Serve (api/docling). Определение хоста (контейнер/хост), запрос к Docling, возврат статуса.
 
+### /logistics-requests
+
+- **POST /logistics-requests** — список логистических заявок с фильтрами, пагинацией и сортировкой. Тело: searchQuery, routeFrom, routeTo, customer, carrier, temperature, vatIncluded, dateFrom, dateTo, priceFrom, priceTo, weightFrom, weightTo, page, size, sortField, sortOrder, includeAggregations. Ответ: items, total, page, size, опционально aggregations (total, avg_price, avg_weight_kg, unique_carriers, unique_routes).
+- **GET /logistics-requests/aggregations** — агрегации по заявкам с опциональными query-параметрами фильтров (для блока аналитики).
+- **GET /logistics-requests/{document_id}** — одна заявка по document_id.
+- **POST /logistics-requests/extract** — запуск пайплайна извлечения заявок из базы знаний. Тело: limit (int | null), force (bool), dry_run (bool), filename (str | null). Логика: поиск кандидатов в индексе documents (PDF + ключевые слова), сборка текста по filename, вызов LLM, запись в logistics_requests_structured (если не dry_run). Ответ: status, started, mode (single | batch), limit, force, dry_run, filename, summary (found_candidates, processed, success, skipped, failed), items (массив { filename, status }). Требует аутентификации.
+
 ### Прочие группы
 
 - **Upload**: /upload_context, /upload_path, /upload_options, /upload_bucket; роут загрузки с инжестом — через router (upload_ingest_router) на путь, заданный в main (например /upload_ingest или аналог).
@@ -49,7 +56,7 @@ REST API Backend (FastAPI), через который Frontend и внешние
 
 ## 5. Связанные компоненты
 
-search (api/search), knowledge_filter, tasks (api/tasks), settings (api/settings), provider_health, docling, router, chat, connectors, documents, auth, oidc.
+search (api/search), knowledge_filter, tasks (api/tasks), settings (api/settings), provider_health, docling, router, chat, connectors, documents, logistics_requests (api/logistics_requests), auth, oidc.
 
 ---
 
@@ -59,8 +66,8 @@ REST API, FastAPI, search, tasks, settings, provider health, knowledge filter.
 
 ## Основные сущности
 
-/search, /tasks, /settings, /knowledge-filter, /provider/health, /docling/health.
+/search, /tasks, /settings, /knowledge-filter, /logistics-requests, /logistics-requests/extract, /provider/health, /docling/health.
 
 ## Связанные компоненты
 
-main.py, api/search, api/tasks, api/settings, api/provider_health, api/docling, api/knowledge_filter, router, dependencies.
+main.py, api/search, api/tasks, api/settings, api/provider_health, api/docling, api/knowledge_filter, api/logistics_requests, router, dependencies.

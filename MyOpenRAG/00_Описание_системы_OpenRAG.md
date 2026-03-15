@@ -10,6 +10,7 @@ OpenRAG — платформа Retrieval-Augmented Generation (RAG) с откр�
 - **Семантический поиск**: поиск по базе знаний по смыслу запроса (vector search).
 - **RAG-чат**: ответы агента с опорой на найденные фрагменты документов и вызов LLM.
 - **Коннекторы**: синхронизация документов из Google Drive, OneDrive, SharePoint.
+- **Логистические заявки**: извлечение структурированных данных из документов в индексе (кандидаты по ключевым словам и mimetype PDF), вызов LLM для парсинга полей заявки (маршрут, заказчик, перевозчик, цена, НДС, вес и т.д.), запись в отдельный индекс `logistics_requests_structured`. Запуск из UI (страница «Логистические заявки») или из консоли (скрипт `scripts.extract_logistics_requests`).
 
 ## 3. Как работает
 
@@ -26,11 +27,11 @@ High-level workflow:
 - **Frontend**: Next.js, экраны Knowledge, Chat, настройки, загрузка файлов/папок.
 - **Backend**: FastAPI, роуты `/upload_ingest`, `/search`, `/chat`, `/tasks`, `/settings`, `/connectors`, `/documents/*`.
 - **Langflow**: два основных flow — инжест (LANGFLOW_INGEST_FLOW_ID) и чат (LANGFLOW_CHAT_FLOW_ID).
-- **OpenSearch**: индекс `documents` (или OPENSEARCH_INDEX_NAME) — хранилище чанков и векторов.
+- **OpenSearch**: индекс `documents` (или OPENSEARCH_INDEX_NAME) — хранилище чанков и векторов; индекс `logistics_requests_structured` — структурированные логистические заявки (результат extraction pipeline).
 
 ## 5. Связанные компоненты
 
-- Backend (FastAPI), Langflow, Docling Serve, OpenSearch, TaskService, LangflowFileService, SearchService, ChatService, Connectors.
+- Backend (FastAPI), Langflow, Docling Serve, OpenSearch, TaskService, LangflowFileService, SearchService, ChatService, Connectors, LogisticsExtractionService, LogisticsRequestsService.
 
 ---
 
@@ -40,8 +41,8 @@ RAG, инжест, семантический поиск, эмбеддинг, ч
 
 ## Основные сущности
 
-UploadTask, FileTask, документ, чанк, индекс OpenSearch, ingestion flow, chat flow.
+UploadTask, FileTask, документ, чанк, индекс OpenSearch, ingestion flow, chat flow, логистическая заявка, extraction pipeline, индекс logistics_requests_structured.
 
 ## Связанные компоненты
 
-Frontend, Backend, Langflow, Docling, OpenSearch, TaskService, SearchService, ChatService, ConnectorService.
+Frontend, Backend, Langflow, Docling, OpenSearch, TaskService, SearchService, ChatService, ConnectorService, LogisticsExtractionService, LogisticsRequestsService.
