@@ -403,6 +403,27 @@ class AppClients:
 
         return self
 
+    async def initialize_opensearch_only(self):
+        """
+        Инициализация только OpenSearch (без Langflow/docling).
+        Для batch-скриптов (например, извлечение логистических заявок),
+        где не нужен полный старт приложения.
+        """
+        from utils.opensearch_utils import wait_for_opensearch
+        self.opensearch = AsyncOpenSearch(
+            hosts=[{"host": OPENSEARCH_HOST, "port": OPENSEARCH_PORT}],
+            connection_class=AIOHttpConnection,
+            scheme="https",
+            use_ssl=True,
+            verify_certs=False,
+            ssl_assert_fingerprint=None,
+            http_auth=(OPENSEARCH_USERNAME, OPENSEARCH_PASSWORD),
+            http_compress=True,
+        )
+        await wait_for_opensearch(self.opensearch)
+        logger.info("OpenSearch initialized for batch script")
+        return self
+
     async def ensure_langflow_client(self):
         """Ensure Langflow client exists; try to generate key and create client lazily."""
         if self.langflow_client is not None:
