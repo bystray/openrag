@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ClipboardList,
   EllipsisVertical,
   FileText,
   Library,
@@ -203,6 +204,12 @@ export function Navigation({
       icon: Library,
       href: "/knowledge",
       active: pathname.startsWith("/knowledge"),
+    },
+    {
+      label: "Заявки",
+      icon: ClipboardList,
+      href: "/logistics-requests",
+      active: pathname.startsWith("/logistics-requests"),
     },
     {
       label: "Settings",

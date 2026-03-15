@@ -32,6 +32,7 @@ from api import (
     flows,
     knowledge_filter,
     langflow_files,
+    logistics_requests,
     models,
     nudges,
     oidc,
@@ -1251,6 +1252,11 @@ async def initialize_services():
     chat_service = ChatService()
     flows_service = FlowsService()
     knowledge_filter_service = KnowledgeFilterService(session_manager)
+    from services.logistics_requests_service import LogisticsRequestsService
+
+    logistics_requests_service = LogisticsRequestsService(
+        session_manager=session_manager,
+    )
     models_service = ModelsService()
     monitor_service = MonitorService(session_manager)
 
@@ -1321,6 +1327,7 @@ async def initialize_services():
         "auth_service": auth_service,
         "connector_service": connector_service,
         "knowledge_filter_service": knowledge_filter_service,
+        "logistics_requests_service": logistics_requests_service,
         "models_service": models_service,
         "monitor_service": monitor_service,
         "session_manager": session_manager,
@@ -1392,6 +1399,26 @@ async def create_app():
 
     # Search endpoint
     app.add_api_route("/search", search.search, methods=["POST"], tags=["internal"])
+
+    # Logistics requests (structured index)
+    app.add_api_route(
+        "/logistics-requests",
+        logistics_requests.list_logistics_requests,
+        methods=["POST"],
+        tags=["internal"],
+    )
+    app.add_api_route(
+        "/logistics-requests/aggregations",
+        logistics_requests.get_logistics_aggregations,
+        methods=["GET"],
+        tags=["internal"],
+    )
+    app.add_api_route(
+        "/logistics-requests/{document_id}",
+        logistics_requests.get_logistics_request_by_id,
+        methods=["GET"],
+        tags=["internal"],
+    )
 
     # Knowledge Filter endpoints
     app.add_api_route(

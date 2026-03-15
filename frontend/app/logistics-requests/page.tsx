@@ -1,0 +1,572 @@
+"use client";
+
+import {
+  type ColDef,
+  type GetRowIdParams,
+  themeQuartz,
+  type ValueFormatterParams,
+} from "ag-grid-community";
+import { AgGridReact } from "ag-grid-react";
+import { ClipboardList } from "lucide-react";
+import { useCallback, useMemo, useState } from "react";
+import { ProtectedRoute } from "@/components/protected-route";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import {
+  formatDisplayPrice,
+  formatRequestDate,
+  formatRoute,
+  formatVatLabel,
+  formatWeightKg,
+  EMPTY,
+} from "@/app/logistics-requests/format";
+import type { LogisticsRequest } from "@/app/logistics-requests/types";
+import { useLogisticsRequestByIdQuery } from "@/app/api/queries/useLogisticsRequestByIdQuery";
+import { useLogisticsRequestsQuery } from "@/app/api/queries/useLogisticsRequestsQuery";
+import "@/components/AgGrid/registerAgGridModules";
+import "@/components/AgGrid/agGridStyles.css";
+import { Label } from "@/components/ui/label";
+
+const PAGE_SIZE = 25;
+const SORT_FIELDS = [
+  { value: "request_date", label: "Дата заявки" },
+  { value: "price_with_vat", label: "Цена" },
+  { value: "weight_kg", label: "Вес" },
+  { value: "processed_at", label: "Обработано" },
+] as const;
+
+function LogisticsRequestsPageContent() {
+  const [searchQuery, setSearchQuery] = useState("");
+  const [routeFrom, setRouteFrom] = useState("");
+  const [routeTo, setRouteTo] = useState("");
+  const [customer, setCustomer] = useState("");
+  const [carrier, setCarrier] = useState("");
+  const [temperature, setTemperature] = useState("");
+  const [vatIncluded, setVatIncluded] = useState<boolean | null>(null);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [priceFrom, setPriceFrom] = useState("");
+  const [priceTo, setPriceTo] = useState("");
+  const [weightFrom, setWeightFrom] = useState("");
+  const [weightTo, setWeightTo] = useState("");
+  const [page, setPage] = useState(1);
+  const [sortField, setSortField] = useState("request_date");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
+  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(
+    null,
+  );
+
+  const params = useMemo(
+    () => ({
+      searchQuery: searchQuery || undefined,
+      routeFrom: routeFrom || undefined,
+      routeTo: routeTo || undefined,
+      customer: customer || undefined,
+      carrier: carrier || undefined,
+      temperature: temperature || undefined,
+      vatIncluded: vatIncluded ?? undefined,
+      dateFrom: dateFrom || undefined,
+      dateTo: dateTo || undefined,
+      priceFrom: priceFrom ? Number(priceFrom) : undefined,
+      priceTo: priceTo ? Number(priceTo) : undefined,
+      weightFrom: weightFrom ? Number(weightFrom) : undefined,
+      weightTo: weightTo ? Number(weightTo) : undefined,
+      page,
+      size: PAGE_SIZE,
+      sortField,
+      sortOrder,
+      includeAggregations: true,
+    }),
+    [
+      searchQuery,
+      routeFrom,
+      routeTo,
+      customer,
+      carrier,
+      temperature,
+      vatIncluded,
+      dateFrom,
+      dateTo,
+      priceFrom,
+      priceTo,
+      weightFrom,
+      weightTo,
+      page,
+      sortField,
+      sortOrder,
+    ],
+  );
+
+  const { data, isFetching } = useLogisticsRequestsQuery(params);
+  const { data: detail, isLoading: detailLoading } =
+    useLogisticsRequestByIdQuery(selectedDocumentId);
+
+  const items = data?.items ?? [];
+  const total = data?.total ?? 0;
+  const aggregations = data?.aggregations;
+
+  const columnDefs: ColDef<LogisticsRequest>[] = useMemo(
+    () => [
+      {
+        field: "request_date",
+        headerName: "Дата заявки",
+        valueFormatter: (p: ValueFormatterParams<LogisticsRequest>) =>
+          formatRequestDate(p.data?.request_date),
+        width: 110,
+      },
+      {
+        field: "request_number",
+        headerName: "№ заявки",
+        width: 110,
+      },
+      {
+        field: "route_from",
+        headerName: "Маршрут",
+        valueFormatter: (p: ValueFormatterParams<LogisticsRequest>) =>
+          formatRoute(p.data?.route_from, p.data?.route_to),
+        flex: 1,
+        minWidth: 160,
+      },
+      { field: "customer", headerName: "Заказчик", width: 120 },
+      { field: "carrier", headerName: "Перевозчик", width: 120 },
+      { field: "cargo", headerName: "Груз", width: 120 },
+      {
+        field: "weight_kg",
+        headerName: "Вес, т",
+        valueFormatter: (p: ValueFormatterParams<LogisticsRequest>) => {
+          const kg = p.data?.weight_kg;
+          if (kg == null) return EMPTY;
+          if (kg >= 1000) return (kg / 1000).toLocaleString("ru-RU", { maximumFractionDigits: 2 });
+          return (kg / 1000).toLocaleString("ru-RU", { maximumFractionDigits: 3 });
+        },
+        width: 90,
+      },
+      {
+        field: "temperature",
+        headerName: "Температура",
+        valueFormatter: (p: ValueFormatterParams<LogisticsRequest>) =>
+          p.data?.temperature ?? EMPTY,
+        width: 100,
+      },
+      {
+        field: "price_with_vat",
+        headerName: "Цена",
+        valueFormatter: (p: ValueFormatterParams<LogisticsRequest>) =>
+          formatDisplayPrice(p.data?.price_with_vat, p.data?.price_without_vat),
+        width: 110,
+      },
+      {
+        field: "vat_included",
+        headerName: "НДС",
+        valueFormatter: (p: ValueFormatterParams<LogisticsRequest>) =>
+          formatVatLabel(p.data?.vat_included),
+        width: 95,
+      },
+      {
+        field: "driver_name",
+        headerName: "Водитель",
+        valueFormatter: (p: ValueFormatterParams<LogisticsRequest>) =>
+          p.data?.driver_name ?? EMPTY,
+        width: 110,
+      },
+    ],
+    [],
+  );
+
+  const defaultColDef = useMemo<ColDef<LogisticsRequest>>(
+    () => ({
+      resizable: true,
+      sortable: false,
+    }),
+    [],
+  );
+
+  const onRowClicked = useCallback((event: { data?: LogisticsRequest }) => {
+    const id = event.data?.document_id;
+    if (id) setSelectedDocumentId(id);
+  }, []);
+
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  return (
+    <div className="flex flex-col h-full overflow-hidden">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-lg font-semibold">Логистические заявки</h2>
+      </div>
+
+      {/* Фильтры */}
+      <div className="flex flex-wrap gap-3 mb-4 p-3 rounded-lg bg-muted/50 border">
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs">Поиск</Label>
+          <Input
+            placeholder="№ заявки, заказчик, перевозчик, груз..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-64 h-8 text-sm"
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs">Откуда</Label>
+          <Input
+            placeholder="Маршрут от"
+            value={routeFrom}
+            onChange={(e) => setRouteFrom(e.target.value)}
+            className="w-40 h-8 text-sm"
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs">Куда</Label>
+          <Input
+            placeholder="Маршрут до"
+            value={routeTo}
+            onChange={(e) => setRouteTo(e.target.value)}
+            className="w-40 h-8 text-sm"
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs">Заказчик</Label>
+          <Input
+            placeholder="Заказчик"
+            value={customer}
+            onChange={(e) => setCustomer(e.target.value)}
+            className="w-40 h-8 text-sm"
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs">Перевозчик</Label>
+          <Input
+            placeholder="Перевозчик"
+            value={carrier}
+            onChange={(e) => setCarrier(e.target.value)}
+            className="w-40 h-8 text-sm"
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs">Температура</Label>
+          <Input
+            placeholder="Температура"
+            value={temperature}
+            onChange={(e) => setTemperature(e.target.value)}
+            className="w-28 h-8 text-sm"
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs">НДС</Label>
+          <select
+            value={vatIncluded === null ? "" : vatIncluded ? "yes" : "no"}
+            onChange={(e) => {
+              const v = e.target.value;
+              setVatIncluded(v === "" ? null : v === "yes");
+            }}
+            className="h-8 w-32 rounded-md border border-input bg-background px-2 text-sm"
+          >
+            <option value="">Все</option>
+            <option value="yes">с НДС</option>
+            <option value="no">без НДС</option>
+          </select>
+        </div>
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs">Дата от</Label>
+          <Input
+            type="date"
+            value={dateFrom}
+            onChange={(e) => setDateFrom(e.target.value)}
+            className="w-36 h-8 text-sm"
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs">Дата до</Label>
+          <Input
+            type="date"
+            value={dateTo}
+            onChange={(e) => setDateTo(e.target.value)}
+            className="w-36 h-8 text-sm"
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs">Цена от</Label>
+          <Input
+            type="number"
+            placeholder="₽"
+            value={priceFrom}
+            onChange={(e) => setPriceFrom(e.target.value)}
+            className="w-28 h-8 text-sm"
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs">Цена до</Label>
+          <Input
+            type="number"
+            placeholder="₽"
+            value={priceTo}
+            onChange={(e) => setPriceTo(e.target.value)}
+            className="w-28 h-8 text-sm"
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs">Вес от (кг)</Label>
+          <Input
+            type="number"
+            value={weightFrom}
+            onChange={(e) => setWeightFrom(e.target.value)}
+            className="w-24 h-8 text-sm"
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs">Вес до (кг)</Label>
+          <Input
+            type="number"
+            value={weightTo}
+            onChange={(e) => setWeightTo(e.target.value)}
+            className="w-24 h-8 text-sm"
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs">Сортировка</Label>
+          <div className="flex gap-1">
+            <select
+              value={sortField}
+              onChange={(e) => setSortField(e.target.value)}
+              className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+            >
+              {SORT_FIELDS.map((s) => (
+                <option key={s.value} value={s.value}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+            <select
+              value={sortOrder}
+              onChange={(e) => setSortOrder(e.target.value as "asc" | "desc")}
+              className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+            >
+              <option value="desc">Сначала новые</option>
+              <option value="asc">Сначала старые</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* Аналитика (summary) */}
+      {aggregations != null && (
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
+          <Card className="bg-card">
+            <CardHeader className="p-3 pb-0">
+              <CardTitle className="text-xs font-medium text-muted-foreground">
+                Всего заявок
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-3 pt-1">
+              <span className="text-lg font-semibold">{aggregations.total}</span>
+            </CardContent>
+          </Card>
+          <Card className="bg-card">
+            <CardHeader className="p-3 pb-0">
+              <CardTitle className="text-xs font-medium text-muted-foreground">
+                Средняя цена
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-3 pt-1">
+              <span className="text-lg font-semibold">
+                {aggregations.avg_price != null
+                  ? `${aggregations.avg_price.toLocaleString("ru-RU", { maximumFractionDigits: 0 })} ₽`
+                  : EMPTY}
+              </span>
+            </CardContent>
+          </Card>
+          <Card className="bg-card">
+            <CardHeader className="p-3 pb-0">
+              <CardTitle className="text-xs font-medium text-muted-foreground">
+                Средний вес
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-3 pt-1">
+              <span className="text-lg font-semibold">
+                {aggregations.avg_weight_kg != null
+                  ? formatWeightKg(aggregations.avg_weight_kg)
+                  : EMPTY}
+              </span>
+            </CardContent>
+          </Card>
+          <Card className="bg-card">
+            <CardHeader className="p-3 pb-0">
+              <CardTitle className="text-xs font-medium text-muted-foreground">
+                Уник. перевозчиков
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-3 pt-1">
+              <span className="text-lg font-semibold">
+                {aggregations.unique_carriers}
+              </span>
+            </CardContent>
+          </Card>
+          <Card className="bg-card">
+            <CardHeader className="p-3 pb-0">
+              <CardTitle className="text-xs font-medium text-muted-foreground">
+                Уник. маршрутов
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-3 pt-1">
+              <span className="text-lg font-semibold">
+                {aggregations.unique_routes}
+              </span>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Таблица */}
+      <div className="flex-1 min-h-0 rounded-lg border overflow-hidden">
+        <AgGridReact<LogisticsRequest>
+          className="w-full h-full"
+          columnDefs={columnDefs}
+          defaultColDef={defaultColDef}
+          rowData={items}
+          getRowId={(params: GetRowIdParams<LogisticsRequest>) =>
+            params.data?.document_id ?? params.data?.request_number ?? params.data?.original_filename ?? ''
+          }
+          onRowClicked={onRowClicked}
+          loading={isFetching}
+          theme={themeQuartz.withParams({ browserColorScheme: "inherit" })}
+          domLayout="normal"
+          rowSelection={undefined}
+          suppressRowClickSelection
+          noRowsOverlayComponent={() => (
+            <div className="text-center py-8 text-muted-foreground">
+              Нет заявок
+            </div>
+          )}
+        />
+      </div>
+
+      {/* Пагинация */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between mt-3 text-sm">
+          <span className="text-muted-foreground">
+            Всего: {total} • Страница {page} из {totalPages}
+          </span>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={page <= 1}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+            >
+              Назад
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={page >= totalPages}
+              onClick={() => setPage((p) => p + 1)}
+            >
+              Вперёд
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Drawer карточки заявки */}
+      <Sheet
+        open={!!selectedDocumentId}
+        onOpenChange={(open) => !open && setSelectedDocumentId(null)}
+      >
+        <SheetContent side="right" className="w-full sm:max-w-lg overflow-y-auto">
+          <SheetHeader>
+            <SheetTitle>Заявка</SheetTitle>
+          </SheetHeader>
+          {detailLoading && <p className="text-sm text-muted-foreground">Загрузка…</p>}
+          {detail && !detailLoading && (
+            <div className="mt-4 space-y-6">
+              <div>
+                <h4 className="text-sm font-medium text-muted-foreground mb-2">
+                  Основная информация
+                </h4>
+                <ul className="text-sm space-y-1">
+                  <li>Номер: {detail.request_number ?? EMPTY}</li>
+                  <li>Дата: {formatRequestDate(detail.request_date)}</li>
+                  <li>Файл: {detail.original_filename ?? EMPTY}</li>
+                </ul>
+              </div>
+              <div>
+                <h4 className="text-sm font-medium text-muted-foreground mb-2">
+                  Маршрут
+                </h4>
+                <ul className="text-sm space-y-1">
+                  <li>Откуда: {detail.route_from ?? EMPTY}</li>
+                  <li>Куда: {detail.route_to ?? EMPTY}</li>
+                  <li>Адрес загрузки: {detail.loading_address ?? EMPTY}</li>
+                  <li>Адрес разгрузки: {detail.unloading_address ?? EMPTY}</li>
+                </ul>
+              </div>
+              <div>
+                <h4 className="text-sm font-medium text-muted-foreground mb-2">
+                  Участники
+                </h4>
+                <ul className="text-sm space-y-1">
+                  <li>Заказчик: {detail.customer ?? EMPTY}</li>
+                  <li>Перевозчик: {detail.carrier ?? EMPTY}</li>
+                </ul>
+              </div>
+              <div>
+                <h4 className="text-sm font-medium text-muted-foreground mb-2">
+                  Груз
+                </h4>
+                <ul className="text-sm space-y-1">
+                  <li>Наименование: {detail.cargo ?? EMPTY}</li>
+                  <li>Вес: {formatWeightKg(detail.weight_kg)}</li>
+                  <li>Температура: {detail.temperature ?? EMPTY}</li>
+                </ul>
+              </div>
+              <div>
+                <h4 className="text-sm font-medium text-muted-foreground mb-2">
+                  Транспорт
+                </h4>
+                <ul className="text-sm space-y-1">
+                  <li>Машина: {detail.vehicle ?? EMPTY}</li>
+                  <li>Водитель: {detail.driver_name ?? EMPTY}</li>
+                  <li>Телефон: {detail.driver_phone ?? EMPTY}</li>
+                </ul>
+              </div>
+              <div>
+                <h4 className="text-sm font-medium text-muted-foreground mb-2">
+                  Коммерческие условия
+                </h4>
+                <ul className="text-sm space-y-1">
+                  <li>Цена без НДС: {formatDisplayPrice(null, detail.price_without_vat)}</li>
+                  <li>Цена с НДС: {formatDisplayPrice(detail.price_with_vat, null)}</li>
+                  <li>НДС: {formatVatLabel(detail.vat_included)}</li>
+                  <li>Условия оплаты: {detail.payment_terms ?? EMPTY}</li>
+                </ul>
+              </div>
+              <div>
+                <h4 className="text-sm font-medium text-muted-foreground mb-2">
+                  Технические поля
+                </h4>
+                <ul className="text-sm space-y-1 text-muted-foreground">
+                  <li>document_id: {detail.document_id ?? EMPTY}</li>
+                  <li>processed_at: {detail.processed_at ?? EMPTY}</li>
+                </ul>
+              </div>
+            </div>
+          )}
+        </SheetContent>
+      </Sheet>
+    </div>
+  );
+}
+
+export default function LogisticsRequestsPage() {
+  return (
+    <ProtectedRoute>
+      <LogisticsRequestsPageContent />
+    </ProtectedRoute>
+  );
+}
