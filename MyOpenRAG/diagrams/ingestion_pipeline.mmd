@@ -1,0 +1,14 @@
+%% Ingestion pipeline: от загрузки до индекса
+%% User Upload -> File Storage -> Docling -> Blocks -> Chunk Builder -> Embeddings -> OpenSearch
+
+flowchart LR
+    A[Загрузка пользователем] --> B[Временное хранилище]
+    B --> C[Langflow Files API]
+    C --> D[Docling Parsing]
+    D --> E[Извлечение блоков]
+    E --> F[Chunk Builder / SplitText]
+    F --> G[Embeddings]
+    G --> H[OpenSearch Index]
+    
+    style A fill:#e1f5fe
+    style H fill:#c8e6c9

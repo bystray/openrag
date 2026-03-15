@@ -1,0 +1,16 @@
+%% Component graph: связи между компонентами OpenRAG
+
+graph TD
+    Frontend[Frontend] --> Backend[Backend]
+    Backend --> Langflow[Langflow]
+    Backend --> Docling[Docling]
+    Backend --> OpenSearch[OpenSearch]
+    Langflow --> Embeddings[Embeddings]
+    Docling --> ParsedBlocks[Parsed Blocks]
+    Langflow --> ParsedBlocks
+    Langflow --> OpenSearch
+    OpenSearch --> Retrieval[Retrieval]
+    Backend --> TaskProcessor[Task Processor]
+    TaskProcessor --> Langflow
+    Backend --> Connectors[Connectors]
+    Connectors --> Langflow

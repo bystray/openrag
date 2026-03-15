@@ -1,0 +1,54 @@
+%% System architecture: OpenRAG
+%% Frontend, Backend, Langflow, Docling, OpenSearch, Task Processor, Connectors
+
+flowchart TB
+    subgraph Client["Клиент"]
+        Browser[Браузер]
+    end
+
+    subgraph Frontend["Frontend (Next.js)"]
+        UI[UI компоненты]
+        API_Client[API клиент]
+    end
+
+    subgraph Backend["Backend (FastAPI)"]
+        Router[Роутер /upload_ingest]
+        TaskService[TaskService]
+        SearchService[SearchService]
+        ChatService[ChatService]
+        DocService[DocumentService]
+        ConnectorAPI[Connectors API]
+    end
+
+    subgraph Langflow["Langflow"]
+        IngestFlow[Ingestion Flow]
+        ChatFlow[Chat Flow]
+        FilesAPI[Files API v2]
+    end
+
+    subgraph Docling["Docling Serve"]
+        Convert[/v1/convert/file]
+    end
+
+    subgraph OpenSearch["OpenSearch"]
+        Index[(Индекс documents)]
+    end
+
+    subgraph Connectors["Коннекторы"]
+        GDrive[Google Drive]
+        OneDrive[OneDrive]
+        SharePoint[SharePoint]
+    end
+
+    Browser --> Frontend
+    Frontend --> Backend
+    Router --> TaskService
+    TaskService --> Langflow
+    Backend --> Docling
+    IngestFlow --> Docling
+    IngestFlow --> Index
+    ChatFlow --> Index
+    SearchService --> Index
+    Backend --> ConnectorAPI
+    ConnectorAPI --> Connectors
+    TaskService --> Langflow

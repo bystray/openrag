@@ -1,0 +1,18 @@
+%% RAG pipeline: документы -> парсинг -> узлы -> эмбеддинги -> индекс -> запрос -> retrieval -> LLM
+
+flowchart TB
+    subgraph Ingest["Инжест"]
+        D[Документы]
+        D --> P[Парсинг Docling]
+        P --> N[Узлы / Chunks]
+        N --> EMB[Embeddings]
+        EMB --> IDX[Векторный индекс OpenSearch]
+    end
+    
+    subgraph Query["Запрос"]
+        Q[Запрос] --> EQ[Эмбеддинг запроса]
+        EQ --> RET[Retrieval]
+        RET --> IDX
+        RET --> CTX[Контекст]
+        CTX --> LLM[LLM]
+    end

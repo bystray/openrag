@@ -1,0 +1,12 @@
+%% Search pipeline: запрос -> поиск -> контекст -> ответ
+%% User Query -> Embedding -> Vector Search -> Chunk Retrieval -> Context -> LLM
+
+flowchart LR
+    Q[Запрос пользователя] --> E[Генерация эмбеддинга]
+    E --> V[Векторный поиск]
+    V --> R[Получение чанков]
+    R --> C[Сборка контекста]
+    C --> L[Ответ LLM]
+    
+    style Q fill:#e1f5fe
+    style L fill:#c8e6c9
