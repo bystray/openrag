@@ -34,6 +34,7 @@ LANGFLOW_CHAT_FLOW_ID = os.getenv("LANGFLOW_CHAT_FLOW_ID") or _legacy_flow_id
 LANGFLOW_INGEST_FLOW_ID = os.getenv("LANGFLOW_INGEST_FLOW_ID")
 LANGFLOW_URL_INGEST_FLOW_ID = os.getenv("LANGFLOW_URL_INGEST_FLOW_ID")
 NUDGES_FLOW_ID = os.getenv("NUDGES_FLOW_ID")
+LANGFLOW_LOGISTICS_EXTRACT_FLOW_ID = os.getenv("LANGFLOW_LOGISTICS_EXTRACT_FLOW_ID")
 
 if _legacy_flow_id and not os.getenv("LANGFLOW_CHAT_FLOW_ID"):
     logger.warning("FLOW_ID is deprecated. Please use LANGFLOW_CHAT_FLOW_ID instead")

@@ -185,16 +185,20 @@ def validate_extraction_result(data: Dict[str, Any]) -> Tuple[bool, Optional[str
 class LogisticsExtractionService:
     """
     Пайплайн: документы из индекса documents → отбор кандидатов → сборка текста →
-    LLM extraction → валидация → запись в logistics_requests_structured.
+    LLM extraction (напрямую или через Langflow flow) → валидация → запись в logistics_requests_structured.
     """
 
     def __init__(
         self,
         opensearch: AsyncOpenSearch,
         llm_client: Optional[AsyncOpenAI] = None,
+        langflow_file_service: Optional[Any] = None,
+        logistics_flow_id: Optional[str] = None,
     ):
         self.opensearch = opensearch
         self._llm_client = llm_client
+        self._langflow_file_service = langflow_file_service
+        self._logistics_flow_id = logistics_flow_id
         self._documents_index = get_index_name()
         self._logistics_index = LOGISTICS_REQUESTS_INDEX
 
@@ -312,11 +316,20 @@ class LogisticsExtractionService:
         llm_model: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
-        Вызов LLM для извлечения JSON. Использует chat.completions.
-        При ошибке парсинга или API возвращает None.
+        Вызов LLM для извлечения JSON. При наличии LANGFLOW_LOGISTICS_EXTRACT_FLOW_ID
+        использует Langflow flow, иначе — chat.completions.
         """
         if not document_text.strip():
             logger.warning("Пустой document_text", document_id=document_id)
+            return None
+        if self._langflow_file_service and self._logistics_flow_id:
+            extraction = await self._langflow_file_service.run_logistics_extraction_flow(
+                document_id=document_id,
+                filename=original_filename,
+                document_text=document_text,
+            )
+            if extraction is not None:
+                return _ensure_extraction_shape(extraction)
             return None
         prompt = build_logistics_extraction_prompt(
             document_id, original_filename, document_text

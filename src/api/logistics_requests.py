@@ -6,7 +6,7 @@ from fastapi import Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from dependencies import get_current_user, get_logistics_requests_service
+from dependencies import get_current_user, get_langflow_file_service, get_logistics_requests_service
 from session_manager import User
 from services.logistics_extraction_service import LogisticsExtractionService
 from services.logistics_requests_service import LogisticsRequestsService
@@ -175,13 +175,13 @@ class ExtractBody(BaseModel):
 async def extract_logistics_requests(
     body: ExtractBody,
     user: User = Depends(get_current_user),
+    langflow_file_service=Depends(get_langflow_file_service),
 ):
     """
-    Запуск пайплайна извлечения: документы из индекса documents → LLM → logistics_requests_structured.
-    Использует существующий LogisticsExtractionService.
+    Запуск пайплайна извлечения: документы из индекса documents → LLM (или Langflow flow) → logistics_requests_structured.
     """
     try:
-        from config.settings import clients
+        from config.settings import clients, LANGFLOW_LOGISTICS_EXTRACT_FLOW_ID
 
         if clients.opensearch is None:
             return JSONResponse(
@@ -189,7 +189,11 @@ async def extract_logistics_requests(
                 status_code=503,
             )
 
-        service = LogisticsExtractionService(opensearch=clients.opensearch)
+        service = LogisticsExtractionService(
+            opensearch=clients.opensearch,
+            langflow_file_service=langflow_file_service,
+            logistics_flow_id=LANGFLOW_LOGISTICS_EXTRACT_FLOW_ID or None,
+        )
 
         if body.filename:
             candidates = await service.get_candidate_filenames(only_filename=body.filename)

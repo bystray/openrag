@@ -4,7 +4,12 @@ import httpx
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from config.settings import LANGFLOW_INGEST_FLOW_ID, LANGFLOW_URL_INGEST_FLOW_ID, clients
+from config.settings import (
+    LANGFLOW_INGEST_FLOW_ID,
+    LANGFLOW_LOGISTICS_EXTRACT_FLOW_ID,
+    LANGFLOW_URL_INGEST_FLOW_ID,
+    clients,
+)
 from utils.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -14,6 +19,7 @@ class LangflowFileService:
     def __init__(self):
         self.flow_id_ingest = LANGFLOW_INGEST_FLOW_ID
         self.flow_id_url_ingest = LANGFLOW_URL_INGEST_FLOW_ID
+        self.flow_id_logistics_extract = LANGFLOW_LOGISTICS_EXTRACT_FLOW_ID
 
     _TRANSIENT_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 
@@ -355,6 +361,110 @@ class LangflowFileService:
             )
 
         return resp.json()
+
+    async def run_logistics_extraction_flow(
+        self,
+        document_id: str,
+        filename: str,
+        document_text: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Запуск flow извлечения логистических полей из текста одного документа.
+        Возвращает распарсенный JSON (dict) или None при ошибке.
+        """
+        flow_id = self.flow_id_logistics_extract
+        if not flow_id or not document_text.strip():
+            return None
+        payload: Dict[str, Any] = {
+            "input_value": document_text,
+            "input_type": "chat",
+            "output_type": "text",
+        }
+        headers = {
+            "X-Langflow-Global-Var-DOCUMENT_ID": str(document_id),
+            "X-Langflow-Global-Var-FILENAME": str(filename),
+        }
+        try:
+            resp = await clients.langflow_request(
+                "POST",
+                f"/api/v1/run/{flow_id}",
+                json=payload,
+                headers=headers,
+            )
+        except Exception as e:
+            logger.warning(
+                "[LF] Logistics extraction flow request failed",
+                document_id=document_id,
+                error=str(e),
+            )
+            return None
+        if resp.status_code >= 400:
+            logger.warning(
+                "[LF] Logistics extraction flow error",
+                document_id=document_id,
+                status_code=resp.status_code,
+                body=resp.text[:500],
+            )
+            return None
+        try:
+            data = resp.json()
+        except Exception as e:
+            logger.warning(
+                "[LF] Logistics flow response not JSON",
+                document_id=document_id,
+                error=str(e),
+            )
+            return None
+        text = self._extract_text_from_run_response(data)
+        if not text or not text.strip():
+            return None
+        raw = text.strip()
+        if raw.startswith("```"):
+            import re
+            raw = re.sub(r"^```\w*\n?", "", raw)
+            raw = re.sub(r"\n?```\s*$", "", raw)
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as e:
+            logger.warning(
+                "[LF] Logistics flow output is not valid JSON",
+                document_id=document_id,
+                error=str(e),
+            )
+            return None
+
+    @staticmethod
+    def _extract_text_from_run_response(data: Dict[str, Any]) -> Optional[str]:
+        """Извлекает текст ответа из структуры ответа Langflow run API."""
+        if not isinstance(data, dict):
+            return None
+        # result.results[].results[].message.text или artifacts
+        result = data.get("result") or data.get("results")
+        if result is None:
+            return None
+        if isinstance(result, dict) and "results" in result:
+            results = result.get("results") or []
+        elif isinstance(result, list):
+            results = result
+        else:
+            return None
+        for item in results:
+            if isinstance(item, dict):
+                inner = item.get("results")
+                if isinstance(inner, list) and inner:
+                    for r in inner:
+                        if isinstance(r, dict):
+                            msg = r.get("message")
+                            if isinstance(msg, dict) and "text" in msg:
+                                return msg.get("text")
+                            art = r.get("artifacts")
+                            if isinstance(art, dict) and "text" in art:
+                                return art.get("text")
+            if isinstance(item, dict) and "message" in item:
+                msg = item.get("message")
+                if isinstance(msg, dict) and "text" in msg:
+                    return msg.get("text")
+        return None
 
     async def _ensure_url_ingest_flow_id(self) -> str:
         """Ensure URL ingest flow ID is valid; import flow if missing.
