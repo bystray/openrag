@@ -38,6 +38,10 @@ EXTRACTION_FIELDS = [
     "unloading_address",
     "customer",
     "carrier",
+    "customer_responsible_name",
+    "customer_responsible_phone",
+    "carrier_responsible_name",
+    "carrier_responsible_phone",
     "cargo",
     "weight_kg",
     "temperature",
@@ -74,7 +78,8 @@ def build_logistics_extraction_prompt(
 Ответ — только один валидный JSON без markdown и пояснений, с полями:
 is_logistics_request (boolean),
 request_number, request_date, route_from, route_to, loading_address, unloading_address,
-customer, carrier, cargo, weight_kg (number или null), temperature, vehicle, driver_name, driver_phone,
+customer, carrier, customer_responsible_name, customer_responsible_phone, carrier_responsible_name, carrier_responsible_phone,
+cargo, weight_kg (number или null), temperature, vehicle, driver_name, driver_phone,
 price_without_vat (number или null), price_with_vat (number или null), vat_included (boolean или null), vat_rate (number или null), payment_terms.
 
 Текст документа:

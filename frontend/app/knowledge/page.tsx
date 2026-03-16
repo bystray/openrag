@@ -527,6 +527,7 @@ function SearchPage() {
       await refreshTasks();
       await queryClient.invalidateQueries({ queryKey: ["search"] });
       await queryClient.refetchQueries({ queryKey: ["search"] });
+      await queryClient.invalidateQueries({ queryKey: ["logistics-requests"], exact: false });
 
       const totalDeletedChunks = deleteResults.reduce(
         (sum, result) => sum + (result.deleted_chunks || 0),

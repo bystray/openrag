@@ -1,15 +1,18 @@
 # API эндпоинты для структурированных логистических заявок.
 
+import os
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
+from config.settings import get_documents_dir
 from dependencies import get_current_user, get_langflow_file_service, get_logistics_requests_service
 from session_manager import User
 from services.logistics_extraction_service import LogisticsExtractionService
 from services.logistics_requests_service import LogisticsRequestsService
+from utils.file_utils import make_safe_storage_filename
 
 
 class LogisticsListBody(BaseModel):
@@ -160,6 +163,32 @@ async def get_logistics_request_by_id(
         return JSONResponse({"error": error_msg}, status_code=500)
 
 
+async def delete_logistics_request(
+    document_id: str,
+    user: User = Depends(get_current_user),
+    service: LogisticsRequestsService = Depends(get_logistics_requests_service),
+):
+    """Удалить заявку по document_id."""
+    if not document_id or not document_id.strip():
+        raise HTTPException(status_code=400, detail="document_id обязателен")
+    try:
+        deleted = await service.delete_by_document_id(
+            user_id=user.user_id,
+            jwt_token=user.jwt_token,
+            document_id=document_id.strip(),
+        )
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Заявка не найдена")
+        return JSONResponse({"success": True, "deleted": True}, status_code=200)
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_msg = str(e)
+        if "AuthenticationException" in error_msg or "access denied" in error_msg.lower():
+            return JSONResponse({"error": error_msg}, status_code=403)
+        return JSONResponse({"error": error_msg}, status_code=500)
+
+
 # --- Извлечение заявок из базы знаний (extraction pipeline) ---
 
 
@@ -280,3 +309,51 @@ async def extract_logistics_requests(
         if "AuthenticationException" in error_msg or "access denied" in error_msg.lower():
             return JSONResponse({"error": error_msg}, status_code=403)
         return JSONResponse({"error": error_msg}, status_code=500)
+
+
+def _find_file_in_documents_dir(filename: str) -> Optional[str]:
+    """Find file in openrag-documents by filename (exact or safe_name match, case-insensitive). Returns path or None."""
+    if not filename or not filename.strip():
+        return None
+    base_dir = get_documents_dir()
+    if not os.path.isdir(base_dir):
+        return None
+    base_real = os.path.realpath(base_dir)
+    filename_clean = filename.strip()
+    safe_target = make_safe_storage_filename(filename_clean).lower()
+
+    def matches(fn: str) -> bool:
+        if fn == filename_clean:
+            return True
+        if fn.lower() == filename_clean.lower():
+            return True
+        if make_safe_storage_filename(fn).lower() == safe_target:
+            return True
+        return False
+
+    # Exact match
+    candidate = os.path.join(base_dir, filename_clean)
+    if os.path.isfile(candidate) and os.path.realpath(candidate).startswith(base_real):
+        return candidate
+
+    # Recursive search: match by filename or safe_name (case-insensitive)
+    for root, _, files in os.walk(base_dir):
+        for fn in files:
+            if matches(fn):
+                path = os.path.join(root, fn)
+                if os.path.realpath(path).startswith(base_real):
+                    return path
+    return None
+
+
+async def get_original_file(
+    filename: Optional[str] = None,
+    user: User = Depends(get_current_user),
+):
+    """Отдать исходный PDF из openrag-documents по имени файла."""
+    if not filename or not filename.strip():
+        raise HTTPException(status_code=400, detail="filename обязателен")
+    file_path = _find_file_in_documents_dir(filename)
+    if not file_path:
+        raise HTTPException(status_code=404, detail="Файл не найден в openrag-documents")
+    return FileResponse(file_path, media_type="application/pdf", filename=os.path.basename(file_path))

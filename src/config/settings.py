@@ -9,7 +9,7 @@ from openai import AsyncOpenAI
 from opensearchpy import AsyncOpenSearch
 from opensearchpy._async.http_aiohttp import AIOHttpConnection
 
-from utils.container_utils import get_container_host
+from utils.container_utils import detect_container_environment, get_container_host
 from utils.logging_config import get_logger
 # Import configuration manager
 from .config_manager import config_manager
@@ -95,6 +95,19 @@ def is_no_auth_mode():
     """Check if we're running in no-auth mode (OAuth credentials missing)"""
     result = not (GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET)
     return result
+
+
+def get_documents_dir() -> str:
+    """Get the openrag-documents directory path.
+    Docker: /app/openrag-documents (volume mount).
+    Local: OPENRAG_DOCUMENTS_PATH env if set, else ./openrag-documents.
+    """
+    if detect_container_environment():
+        return os.path.abspath("/app/openrag-documents")
+    custom = os.getenv("OPENRAG_DOCUMENTS_PATH", "").strip()
+    if custom:
+        return os.path.abspath(os.path.expanduser(custom))
+    return os.path.abspath(os.path.join(os.getcwd(), "openrag-documents"))
 
 
 # Webhook configuration - must be set to enable webhooks

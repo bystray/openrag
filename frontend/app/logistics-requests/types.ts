@@ -11,6 +11,10 @@ export interface LogisticsRequest {
   unloading_address?: string;
   customer?: string;
   carrier?: string;
+  customer_responsible_name?: string | null;
+  customer_responsible_phone?: string | null;
+  carrier_responsible_name?: string | null;
+  carrier_responsible_phone?: string | null;
   cargo?: string;
   weight_kg?: number | null;
   temperature?: string | null;

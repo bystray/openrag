@@ -206,6 +206,42 @@ class LogisticsRequestsService:
             return None
         return hits[0].get("_source")
 
+    async def delete_by_document_id(
+        self,
+        user_id: str,
+        jwt_token: Optional[str],
+        document_id: str,
+    ) -> bool:
+        """Удалить заявку по document_id. Возвращает True, если удалено."""
+        if not document_id or not document_id.strip():
+            return False
+        opensearch = self.session_manager.get_user_opensearch_client(
+            user_id, jwt_token
+        )
+        body = {"query": {"term": {"document_id": document_id.strip()}}}
+        try:
+            result = await opensearch.delete_by_query(
+                index=LOGISTICS_REQUESTS_INDEX,
+                body=body,
+                conflicts="proceed",
+                ignore_unavailable=True,
+            )
+            deleted = result.get("deleted", 0)
+            if deleted > 0:
+                logger.info(
+                    "Удалена логистическая заявка",
+                    document_id=document_id,
+                    deleted=deleted,
+                )
+            return deleted > 0
+        except Exception as e:
+            logger.warning(
+                "Ошибка удаления заявки",
+                document_id=document_id,
+                error=str(e),
+            )
+            return False
+
     async def get_aggregations_with_filters(
         self,
         user_id: str,

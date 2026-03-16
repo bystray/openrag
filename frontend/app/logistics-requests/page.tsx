@@ -8,7 +8,7 @@ import {
 } from "ag-grid-community";
 import { AgGridReact } from "ag-grid-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Loader2, FileSearch } from "lucide-react";
+import { Loader2, FileSearch, Trash2 } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { ProtectedRoute } from "@/components/protected-route";
 import { Button } from "@/components/ui/button";
@@ -44,6 +44,8 @@ import {
 } from "@/app/logistics-requests/types";
 import { useLogisticsRequestByIdQuery } from "@/app/api/queries/useLogisticsRequestByIdQuery";
 import { useLogisticsRequestsQuery } from "@/app/api/queries/useLogisticsRequestsQuery";
+import { useDeleteLogisticsRequest } from "@/app/api/mutations/useDeleteLogisticsRequest";
+import { toast } from "sonner";
 import "@/components/AgGrid/registerAgGridModules";
 import "@/components/AgGrid/agGridStyles.css";
 import { Label } from "@/components/ui/label";
@@ -74,6 +76,9 @@ function LogisticsRequestsPageContent() {
   const [sortField, setSortField] = useState("request_date");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(
+    null,
+  );
+  const [deletingDocumentId, setDeletingDocumentId] = useState<string | null>(
     null,
   );
   const [extractLoading, setExtractLoading] = useState(false);
@@ -127,6 +132,7 @@ function LogisticsRequestsPageContent() {
   const { data, isFetching } = useLogisticsRequestsQuery(params);
   const { data: detail, isLoading: detailLoading } =
     useLogisticsRequestByIdQuery(selectedDocumentId);
+  const deleteMutation = useDeleteLogisticsRequest();
 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
@@ -196,8 +202,42 @@ function LogisticsRequestsPageContent() {
           p.data?.driver_name ?? EMPTY,
         width: 110,
       },
+      {
+        headerName: "",
+        width: 52,
+        sortable: false,
+        cellRenderer: (p: { data?: LogisticsRequest }) => {
+          const docId = p.data?.document_id;
+          if (!docId) return null;
+          const isDeleting = deletingDocumentId === docId;
+          return (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setDeletingDocumentId(docId);
+                deleteMutation.mutate(docId, {
+                  onSettled: () => setDeletingDocumentId(null),
+                  onSuccess: () => toast.success("Заявка удалена"),
+                  onError: (err) =>
+                    toast.error(err instanceof Error ? err.message : "Ошибка удаления"),
+                });
+              }}
+              disabled={isDeleting}
+              className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50"
+              title="Удалить заявку"
+            >
+              {isDeleting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Trash2 className="h-4 w-4" />
+              )}
+            </button>
+          );
+        },
+      },
     ],
-    [],
+    [deleteMutation, deletingDocumentId],
   );
 
   const defaultColDef = useMemo<ColDef<LogisticsRequest>>(
@@ -671,47 +711,48 @@ function LogisticsRequestsPageContent() {
                   Режим «без записи» (dry run) — в индекс ничего не записано.
                 </p>
               )}
-              {extractResult.items.length > 0 && (
+              {extractResult.items.filter((i) => i.status === "failed").length >
+                0 && (
                 <div className="flex-1 min-h-0 overflow-auto">
-                  <p className="text-xs text-muted-foreground mb-2">По файлам:</p>
+                  <p className="text-xs text-muted-foreground mb-2">
+                    По файлам (с ошибками):
+                  </p>
                   <ul className="space-y-1 text-sm max-h-60 overflow-y-auto pr-2">
-                    {extractResult.items.map((item, i) => (
-                      <li
-                        key={`${item.filename}-${i}`}
-                        className="flex flex-col gap-0.5 py-1 border-b border-border/50 last:border-0"
-                      >
-                        <div className="flex justify-between gap-2">
-                          <span className="truncate" title={item.filename}>
-                            {item.filename}
-                          </span>
-                          <span
-                            className={
-                              item.status === "success"
-                                ? "text-green-600 dark:text-green-400 shrink-0"
-                                : item.status === "skipped"
-                                  ? "text-muted-foreground shrink-0"
-                                  : "text-destructive shrink-0"
-                            }
+                    {extractResult.items
+                      .filter((item) => item.status === "failed")
+                      .map((item, i) => {
+                        const fileUrl = `/api/logistics-requests/original-file?filename=${encodeURIComponent(item.filename)}`;
+                        return (
+                          <li
+                            key={`${item.filename}-${i}`}
+                            className="flex flex-col gap-0.5 py-1 border-b border-border/50 last:border-0"
                           >
-                            {item.status === "success"
-                              ? "успешно"
-                              : item.status === "skipped"
-                                ? "пропущен"
-                                : "ошибка"}
-                          </span>
-                        </div>
-                        {item.status === "failed" &&
-                          item.error_message &&
-                          item.error_message.length > 0 && (
-                            <span
-                              className="text-xs text-muted-foreground"
-                              title={item.error_message}
-                            >
-                              {item.error_message}
-                            </span>
-                          )}
-                      </li>
-                    ))}
+                            <div className="flex justify-between gap-2">
+                              <a
+                                href={fileUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="truncate cursor-pointer hover:underline text-primary"
+                                title={item.filename}
+                              >
+                                {item.filename}
+                              </a>
+                              <span className="text-destructive shrink-0">
+                                ошибка
+                              </span>
+                            </div>
+                            {item.error_message &&
+                              item.error_message.length > 0 && (
+                                <span
+                                  className="text-xs text-muted-foreground"
+                                  title={item.error_message}
+                                >
+                                  {item.error_message}
+                                </span>
+                              )}
+                          </li>
+                        );
+                      })}
                   </ul>
                 </div>
               )}
@@ -760,6 +801,20 @@ function LogisticsRequestsPageContent() {
                 <ul className="text-sm space-y-1">
                   <li>Заказчик: {detail.customer ?? EMPTY}</li>
                   <li>Перевозчик: {detail.carrier ?? EMPTY}</li>
+                  <li>
+                    Ответственный заказчика:{" "}
+                    {detail.customer_responsible_name ?? EMPTY}
+                    {detail.customer_responsible_phone
+                      ? ` (${detail.customer_responsible_phone})`
+                      : ""}
+                  </li>
+                  <li>
+                    Ответственный исполнителя:{" "}
+                    {detail.carrier_responsible_name ?? EMPTY}
+                    {detail.carrier_responsible_phone
+                      ? ` (${detail.carrier_responsible_phone})`
+                      : ""}
+                  </li>
                 </ul>
               </div>
               <div>

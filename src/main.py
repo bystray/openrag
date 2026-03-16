@@ -376,17 +376,8 @@ def generate_jwt_keys():
 
 def _get_documents_dir():
     """Get the documents directory path, handling both Docker and local environments."""
-    # In Docker, the volume is mounted at /app/openrag-documents
-    # Locally, we use openrag-documents
-    container_env = detect_container_environment()
-    if container_env:
-        path = os.path.abspath("/app/openrag-documents")
-        logger.debug(f"Running in {container_env}, using container path: {path}")
-        return path
-    else:
-        path = os.path.abspath(os.path.join(os.getcwd(), "openrag-documents"))
-        logger.debug(f"Running locally, using local path: {path}")
-        return path
+    from config.settings import get_documents_dir
+    return get_documents_dir()
 
 
 def _should_use_url_default_docs_ingest() -> bool:
@@ -1414,8 +1405,8 @@ async def create_app():
         tags=["internal"],
     )
     app.add_api_route(
-        "/logistics-requests/{document_id}",
-        logistics_requests.get_logistics_request_by_id,
+        "/logistics-requests/original-file",
+        logistics_requests.get_original_file,
         methods=["GET"],
         tags=["internal"],
     )
@@ -1423,6 +1414,18 @@ async def create_app():
         "/logistics-requests/extract",
         logistics_requests.extract_logistics_requests,
         methods=["POST"],
+        tags=["internal"],
+    )
+    app.add_api_route(
+        "/logistics-requests/{document_id}",
+        logistics_requests.get_logistics_request_by_id,
+        methods=["GET"],
+        tags=["internal"],
+    )
+    app.add_api_route(
+        "/logistics-requests/{document_id}",
+        logistics_requests.delete_logistics_request,
+        methods=["DELETE"],
         tags=["internal"],
     )
 

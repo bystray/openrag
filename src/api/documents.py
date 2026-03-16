@@ -55,6 +55,47 @@ async def delete_documents_by_filename_core(
             user_id=user_id,
         )
 
+        # Cascade: delete related logistics requests (document_id or original_filename = filename)
+        # Match safe_name and normalized_filename — document_id may be stored as either
+        try:
+            from services.logistics_requests_service import LOGISTICS_REQUESTS_INDEX
+
+            doc_ids_to_match = [safe_name]
+            if normalized_filename != safe_name:
+                doc_ids_to_match.append(normalized_filename)
+            should_clauses = [
+                {"term": {"document_id": doc_id}} for doc_id in doc_ids_to_match
+            ]
+            should_clauses.extend(
+                {"term": {"original_filename": doc_id}} for doc_id in doc_ids_to_match
+            )
+            logistics_delete = {
+                "query": {
+                    "bool": {
+                        "should": should_clauses,
+                        "minimum_should_match": 1,
+                    }
+                }
+            }
+            logistics_result = await opensearch_client.delete_by_query(
+                index=LOGISTICS_REQUESTS_INDEX,
+                body=logistics_delete,
+                conflicts="proceed",
+                ignore_unavailable=True,
+            )
+            logistics_deleted = logistics_result.get("deleted", 0)
+            if logistics_deleted > 0:
+                logger.info(
+                    f"Deleted {logistics_deleted} logistics request(s) for filename {normalized_filename}",
+                    user_id=user_id,
+                )
+        except Exception as log_err:
+            logger.warning(
+                "Failed to cascade delete from logistics_requests_structured",
+                filename=normalized_filename,
+                error=str(log_err),
+            )
+
         if deleted_count == 0:
             return (
                 {
