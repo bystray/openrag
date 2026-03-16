@@ -4,4 +4,4 @@ _meta:
 
 admin:
   reserved: true
-  hash: "ADMIN_HASH_PLACEHOLDER"
+  hash: "$2y$12$C0IEKCCAFSlIFw269HlEk.lsT7RnIFBUrzf7S4P22se4f8Y2XSuAC"

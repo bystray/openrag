@@ -430,10 +430,10 @@ class LogisticsExtractionService:
         force: bool = False,
         dry_run: bool = False,
         llm_model: Optional[str] = None,
-    ) -> str:
+    ) -> Dict[str, Any]:
         """
         Обрабатывает один документ по filename.
-        Возвращает: "success" | "skipped" | "failed".
+        Возвращает: {"status": "success"|"skipped"|"failed", "error_category": str|None, "error_message": str|None}.
         """
         document_id = filename
         original_filename = filename
@@ -445,7 +445,11 @@ class LogisticsExtractionService:
                     filename=filename,
                     document_id=document_id,
                 )
-                return "skipped"
+                return {
+                    "status": "skipped",
+                    "error_category": "already_processed",
+                    "error_message": None,
+                }
 
         texts = await self.load_chunk_texts_by_filename(filename)
         document_text = build_document_text(texts)
@@ -456,17 +460,39 @@ class LogisticsExtractionService:
             chunks_count=len(texts),
         )
 
+        if not document_text.strip():
+            logger.warning("Пустой текст документа", filename=filename)
+            return {
+                "status": "failed",
+                "error_category": "parsing_error",
+                "error_message": "Пустой текст документа",
+            }
+
         extraction = await self.call_llm_extraction(
             document_id, original_filename, document_text, llm_model=llm_model
         )
         if extraction is None:
-            return "failed"
+            return {
+                "status": "failed",
+                "error_category": "parsing_error",
+                "error_message": "LLM не вернул валидный JSON",
+            }
 
         ok, err = validate_extraction_result(extraction)
         if not ok:
             logger.warning("Валидация не пройдена", filename=filename, reason=err)
-            return "failed"
+            return {
+                "status": "failed",
+                "error_category": "validation_error",
+                "error_message": err,
+            }
 
         doc = self.build_doc_for_index(document_id, original_filename, extraction)
         saved = await self.save_to_index(doc, dry_run=dry_run)
-        return "success" if saved else "failed"
+        if saved:
+            return {"status": "success", "error_category": None, "error_message": None}
+        return {
+            "status": "failed",
+            "error_category": "opensearch_error",
+            "error_message": "Ошибка записи в индекс",
+        }

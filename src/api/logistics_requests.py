@@ -215,6 +215,7 @@ async def extract_logistics_requests(
                             "failed": 0,
                         },
                         "items": [],
+                        "error_summary": {},
                     },
                     status_code=200,
                 )
@@ -225,6 +226,7 @@ async def extract_logistics_requests(
         skipped_count = 0
         failed_count = 0
         items: List[Dict[str, Any]] = []
+        error_summary: Dict[str, int] = {}
 
         for fn in candidates:
             result = await service.process_one(
@@ -232,13 +234,27 @@ async def extract_logistics_requests(
                 force=body.force,
                 dry_run=body.dry_run,
             )
-            items.append({"filename": fn, "status": result})
-            if result == "success":
+            status = result["status"]
+            err_cat = result.get("error_category")
+            err_msg = result.get("error_message")
+
+            items.append({
+                "filename": fn,
+                "status": status,
+                "error_category": err_cat,
+                "error_message": err_msg,
+            })
+
+            if status == "success":
                 success_count += 1
-            elif result == "skipped":
+            elif status == "skipped":
                 skipped_count += 1
+                if err_cat:
+                    error_summary[err_cat] = error_summary.get(err_cat, 0) + 1
             else:
                 failed_count += 1
+                if err_cat:
+                    error_summary[err_cat] = error_summary.get(err_cat, 0) + 1
 
         response: Dict[str, Any] = {
             "status": "ok",
@@ -256,6 +272,7 @@ async def extract_logistics_requests(
                 "failed": failed_count,
             },
             "items": items,
+            "error_summary": error_summary,
         }
         return JSONResponse(response, status_code=200)
     except Exception as e:

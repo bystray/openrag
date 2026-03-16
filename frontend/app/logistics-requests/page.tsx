@@ -38,6 +38,10 @@ import type {
   LogisticsRequest,
   ExtractResponse,
 } from "@/app/logistics-requests/types";
+import {
+  EXTRACT_ERROR_HINTS,
+  EXTRACT_ERROR_LABELS,
+} from "@/app/logistics-requests/types";
 import { useLogisticsRequestByIdQuery } from "@/app/api/queries/useLogisticsRequestByIdQuery";
 import { useLogisticsRequestsQuery } from "@/app/api/queries/useLogisticsRequestsQuery";
 import "@/components/AgGrid/registerAgGridModules";
@@ -242,6 +246,7 @@ function LogisticsRequestsPageContent() {
             failed: 0,
           },
           items: [],
+          error_summary: {},
           error: (data as { error?: string }).error ?? "Ошибка запуска извлечения",
         } as ExtractResponse & { error?: string });
       } else {
@@ -265,6 +270,7 @@ function LogisticsRequestsPageContent() {
           failed: 0,
         },
         items: [],
+        error_summary: {},
         error: err instanceof Error ? err.message : "Ошибка сети",
       } as ExtractResponse & { error?: string });
     } finally {
@@ -286,11 +292,16 @@ function LogisticsRequestsPageContent() {
           className="gap-2"
         >
           {extractLoading ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Идёт извлечение…
+            </>
           ) : (
-            <FileSearch className="h-4 w-4" />
+            <>
+              <FileSearch className="h-4 w-4" />
+              Извлечь заявки из базы знаний
+            </>
           )}
-          Извлечь заявки из базы знаний
         </Button>
       </div>
 
@@ -609,6 +620,52 @@ function LogisticsRequestsPageContent() {
                   </p>
                 </div>
               </div>
+              {extractResult.summary.found_candidates > 0 && (
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 h-2 rounded-full bg-muted overflow-hidden">
+                    <div
+                      className="h-full bg-primary transition-all"
+                      style={{
+                        width: `${Math.round(
+                          (extractResult.summary.processed /
+                            extractResult.summary.found_candidates) *
+                            100
+                        )}%`,
+                      }}
+                    />
+                  </div>
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">
+                    Обработано {extractResult.summary.processed} из{" "}
+                    {extractResult.summary.found_candidates} (
+                    {Math.round(
+                      (extractResult.summary.processed /
+                        extractResult.summary.found_candidates) *
+                        100
+                    )}
+                    %)
+                  </span>
+                </div>
+              )}
+              {extractResult.error_summary &&
+                Object.keys(extractResult.error_summary).length > 0 && (
+                  <div className="rounded border p-3 space-y-2">
+                    <h4 className="text-sm font-medium">Подробнее об ошибках</h4>
+                    <ul className="space-y-1.5 text-sm">
+                      {Object.entries(extractResult.error_summary).map(
+                        ([cat, count]) => (
+                          <li key={cat} className="flex flex-col gap-0.5">
+                            <span className="font-medium">
+                              {EXTRACT_ERROR_LABELS[cat] ?? cat}: {count}
+                            </span>
+                            <span className="text-muted-foreground text-xs">
+                              {EXTRACT_ERROR_HINTS[cat] ?? "—"}
+                            </span>
+                          </li>
+                        )
+                      )}
+                    </ul>
+                  </div>
+                )}
               {extractResult.dry_run && (
                 <p className="text-xs text-muted-foreground">
                   Режим «без записи» (dry run) — в индекс ничего не записано.
@@ -621,26 +678,38 @@ function LogisticsRequestsPageContent() {
                     {extractResult.items.map((item, i) => (
                       <li
                         key={`${item.filename}-${i}`}
-                        className="flex justify-between gap-2 py-1 border-b border-border/50 last:border-0"
+                        className="flex flex-col gap-0.5 py-1 border-b border-border/50 last:border-0"
                       >
-                        <span className="truncate" title={item.filename}>
-                          {item.filename}
-                        </span>
-                        <span
-                          className={
-                            item.status === "success"
-                              ? "text-green-600 dark:text-green-400"
+                        <div className="flex justify-between gap-2">
+                          <span className="truncate" title={item.filename}>
+                            {item.filename}
+                          </span>
+                          <span
+                            className={
+                              item.status === "success"
+                                ? "text-green-600 dark:text-green-400 shrink-0"
+                                : item.status === "skipped"
+                                  ? "text-muted-foreground shrink-0"
+                                  : "text-destructive shrink-0"
+                            }
+                          >
+                            {item.status === "success"
+                              ? "успешно"
                               : item.status === "skipped"
-                                ? "text-muted-foreground"
-                                : "text-destructive"
-                          }
-                        >
-                          {item.status === "success"
-                            ? "успешно"
-                            : item.status === "skipped"
-                              ? "пропущен"
-                              : "ошибка"}
-                        </span>
+                                ? "пропущен"
+                                : "ошибка"}
+                          </span>
+                        </div>
+                        {item.status === "failed" &&
+                          item.error_message &&
+                          item.error_message.length > 0 && (
+                            <span
+                              className="text-xs text-muted-foreground"
+                              title={item.error_message}
+                            >
+                              {item.error_message}
+                            </span>
+                          )}
                       </li>
                     ))}
                   </ul>

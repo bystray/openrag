@@ -85,14 +85,23 @@ async def main_async(
             force=force,
             dry_run=dry_run,
         )
-        if result == "success":
+        status = result.get("status", "failed")
+        err_cat = result.get("error_category")
+        err_msg = result.get("error_message")
+
+        if status == "success":
             success_count += 1
             logger.info("Extraction успешен", filename=fn)
-        elif result == "skipped":
+        elif status == "skipped":
             skipped_count += 1
         else:
             failed_count += 1
-            logger.warning("Extraction завершился с ошибкой или не прошёл валидацию", filename=fn)
+            logger.warning(
+                "Extraction завершился с ошибкой",
+                filename=fn,
+                error_category=err_cat,
+                error_message=err_msg,
+            )
 
     logger.info(
         "Batch завершён",

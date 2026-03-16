@@ -70,10 +70,21 @@ export interface ExtractParams {
   filename?: string | null;
 }
 
+/** Категории ошибок при извлечении */
+export type ExtractErrorCategory =
+  | "already_processed"
+  | "opensearch_error"
+  | "parsing_error"
+  | "validation_error"
+  | "config_error"
+  | "unknown_error";
+
 /** Итог по одному файлу в ответе extract */
 export interface ExtractItem {
   filename: string;
   status: "success" | "skipped" | "failed";
+  error_category?: ExtractErrorCategory;
+  error_message?: string;
 }
 
 /** Ответ API POST /logistics-requests/extract */
@@ -93,4 +104,29 @@ export interface ExtractResponse {
     failed: number;
   };
   items: ExtractItem[];
+  error_summary?: Record<string, number>;
 }
+
+/** Подсказки по категориям ошибок для пользователя */
+export const EXTRACT_ERROR_HINTS: Record<string, string> = {
+  already_processed:
+    "Файл уже был ранее успешно извлечён. Используйте опцию «Переобработать» для повторной обработки.",
+  opensearch_error:
+    "Проверьте доступность OpenSearch и права роли openrag_user_role.",
+  parsing_error:
+    "Проверьте формат заявок и промпт LLM. Возможно, текст документа пуст или LLM не вернул валидный JSON.",
+  validation_error:
+    "Проверьте обязательные поля (маршрут/адреса, заказчик/перевозчик, цена или вес).",
+  config_error:
+    "Проверьте настройки LANGFLOW_LOGISTICS_EXTRACT_FLOW_ID и ключи API.",
+};
+
+/** Человекочитаемые названия категорий ошибок */
+export const EXTRACT_ERROR_LABELS: Record<string, string> = {
+  already_processed: "Уже обработан",
+  opensearch_error: "Ошибка OpenSearch",
+  parsing_error: "Ошибка парсинга",
+  validation_error: "Ошибка валидации",
+  config_error: "Ошибка конфигурации",
+  unknown_error: "Неизвестная ошибка",
+};
