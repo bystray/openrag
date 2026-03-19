@@ -89,6 +89,10 @@ def get_logistics_requests_service(services: dict = Depends(get_services)):
     return services["logistics_requests_service"]
 
 
+def get_docling_service_manager(services: dict = Depends(get_services)):
+    return services["docling_service_manager"]
+
+
 # ─────────────────────────────────────────────
 # Authentication dependencies
 # ─────────────────────────────────────────────

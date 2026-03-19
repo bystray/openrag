@@ -124,6 +124,27 @@ async def ensure_embedding_field_exists(
             )
         return field_name
 
+    # Warn if adding a new embedding field to an index that already has other knn_vector fields.
+    # Multi-model indices can trigger JVector merge corruption (opensearch-jvector #287).
+    try:
+        full_mapping = await opensearch_client.indices.get_mapping(index=index_name)
+        all_props = (
+            full_mapping.get(index_name, {}).get("mappings", {}).get("properties", {}) or {}
+        )
+        other_knn = [
+            k for k, v in all_props.items()
+            if isinstance(v, dict) and v.get("type") == "knn_vector" and k != field_name
+        ]
+        if other_knn:
+            logger.warning(
+                "Adding embedding field '%s' to index that already has other knn_vector fields: %s. "
+                "Multi-model indices can cause JVector merge corruption. Consider using a single embedding model or recreating the index.",
+                field_name,
+                other_knn,
+            )
+    except Exception:
+        pass
+
     # Define the field mapping for both the vector field and the tracking field
     mapping = {
         "properties": {

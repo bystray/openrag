@@ -28,6 +28,7 @@ from api import (
     chat,
     connectors,
     docling,
+    docling_service,
     documents,
     flows,
     knowledge_filter,
@@ -1308,6 +1309,13 @@ async def initialize_services():
     # API Key service for public API authentication
     api_key_service = APIKeyService(session_manager)
 
+    # Docling Docker service manager for container diagnostics
+    from services.docling_service_manager import DoclingServiceManager
+
+    docling_service_manager = DoclingServiceManager(
+        docling_url=docling.DOCLING_SERVICE_URL,
+    )
+
     return {
         "document_service": document_service,
         "search_service": search_service,
@@ -1323,6 +1331,7 @@ async def initialize_services():
         "monitor_service": monitor_service,
         "session_manager": session_manager,
         "api_key_service": api_key_service,
+        "docling_service_manager": docling_service_manager,
     }
 
 
@@ -1696,6 +1705,32 @@ async def create_app():
     # Docling service proxy
     app.add_api_route(
         "/docling/health", docling.health, methods=["GET"], tags=["internal"]
+    )
+
+    # Docling Docker service management
+    app.add_api_route(
+        "/docling/service/status",
+        docling_service.get_status,
+        methods=["GET"],
+        tags=["internal"],
+    )
+    app.add_api_route(
+        "/docling/service/logs",
+        docling_service.get_logs,
+        methods=["GET"],
+        tags=["internal"],
+    )
+    app.add_api_route(
+        "/docling/service/restart",
+        docling_service.restart_service,
+        methods=["POST"],
+        tags=["internal"],
+    )
+    app.add_api_route(
+        "/docling/service/healthcheck",
+        docling_service.run_healthcheck,
+        methods=["POST"],
+        tags=["internal"],
     )
 
     # ===== API Key Management Endpoints (JWT auth for UI) =====

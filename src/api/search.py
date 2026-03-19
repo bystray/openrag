@@ -52,10 +52,19 @@ async def search(
         return JSONResponse(result, status_code=200)
     except Exception as e:
         error_msg = str(e)
+        root_cause = None
+        if hasattr(e, "info") and isinstance(getattr(e, "info"), dict):
+            err = getattr(e, "info", {}).get("error", {})
+            causes = err.get("root_cause")
+            if causes:
+                root_cause = "; ".join(
+                    c.get("reason", str(c)) for c in causes if isinstance(c, dict)
+                )
         if (
             "AuthenticationException" in error_msg
             or "access denied" in error_msg.lower()
         ):
             return JSONResponse({"error": error_msg}, status_code=403)
         else:
-            return JSONResponse({"error": error_msg}, status_code=500)
+            display_msg = f"{root_cause}" if root_cause else error_msg
+            return JSONResponse({"error": display_msg}, status_code=500)

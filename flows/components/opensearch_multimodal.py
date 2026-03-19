@@ -485,7 +485,11 @@ class OpenSearchVectorStoreComponentMultimodalMultiEmbedding(LCVectorStoreCompon
             Dictionary containing OpenSearch index mapping configuration
         """
         return {
-            "settings": {"index": {"knn": True, "knn.algo_param.ef_search": ef_search}},
+            "settings": {
+                "index": {"knn": True, "knn.algo_param.ef_search": ef_search},
+                "number_of_shards": 1,
+                "number_of_replicas": 0,
+            },
             "mappings": {
                 "properties": {
                     vector_field: {
@@ -666,6 +670,26 @@ class OpenSearchVectorStoreComponentMultimodalMultiEmbedding(LCVectorStoreCompon
         logger.debug(f"[OpenSearchMultimodal] Bulk ingesting embeddings for {index_name}")
         if not mapping:
             mapping = {}
+
+        # Filter out documents with null/empty vectors to prevent JVector merge corruption
+        # (opensearch-jvector #287: ArrayIndexOutOfBoundsException when merging docs without vectors)
+        valid_indices = [
+            i for i in range(len(texts))
+            if i < len(embeddings) and embeddings[i] is not None and len(embeddings[i]) > 0
+        ]
+        if len(valid_indices) < len(texts):
+            skipped = len(texts) - len(valid_indices)
+            logger.warning(
+                f"[OpenSearchMultimodal] Skipping {skipped} document(s) with null/empty vectors to prevent index corruption"
+            )
+            texts = [texts[i] for i in valid_indices]
+            embeddings = [embeddings[i] for i in valid_indices]
+            metadatas = [metadatas[i] for i in valid_indices] if metadatas else None
+            ids = [ids[i] for i in valid_indices] if ids else None
+
+        if not texts or not embeddings:
+            self.log("No valid documents to index (all had null/empty vectors)")
+            return []
 
         requests = []
         return_ids = []

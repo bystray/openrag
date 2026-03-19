@@ -429,8 +429,15 @@ class SearchService:
                 )
                 raise
         except Exception as e:
+            root_cause = None
+            if hasattr(e, "info") and isinstance(getattr(e, "info"), dict):
+                err = getattr(e, "info", {}).get("error", {})
+                root_cause = err.get("root_cause") or err.get("reason", str(e))
             logger.error(
-                "OpenSearch query failed", error=str(e), search_body=search_body
+                "OpenSearch query failed",
+                error=str(e),
+                root_cause=root_cause,
+                search_body=search_body,
             )
             # Re-raise the exception so the API returns the error to frontend
             raise

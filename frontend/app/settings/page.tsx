@@ -807,6 +807,11 @@ function KnowledgeSourcesPage() {
           <div className="flex items-center justify-between mb-3">
             <CardTitle className="text-lg">Knowledge Ingest</CardTitle>
             <div className="flex gap-2">
+              <Link href="/settings/docling-service">
+                <Button variant="outline" size="sm">
+                  Docling Service
+                </Button>
+              </Link>
               <ConfirmationDialog
                 trigger={
                   <Button ignoreTitleCase={true} variant="outline">

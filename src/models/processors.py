@@ -250,8 +250,22 @@ class TaskProcessor:
             )
             embeddings.extend([d.embedding for d in resp.data])
 
-        # Index each chunk as a separate document
-        for i, (chunk, vect) in enumerate(zip(slim_doc["chunks"], embeddings)):
+        # Index each chunk as a separate document.
+        # Skip chunks with null/empty embeddings to prevent JVector merge corruption (opensearch-jvector #287).
+        chunks_with_vectors = [
+            (i, chunk, vect)
+            for i, (chunk, vect) in enumerate(zip(slim_doc["chunks"], embeddings))
+            if vect is not None and len(vect) > 0
+        ]
+        if len(chunks_with_vectors) < len(slim_doc["chunks"]):
+            logger.warning(
+                "Skipping %s chunk(s) with null/empty embeddings to prevent index corruption",
+                len(slim_doc["chunks"]) - len(chunks_with_vectors),
+            )
+        if not chunks_with_vectors:
+            logger.error("No valid chunks to index (all had null/empty embeddings)")
+            raise RuntimeError("Embedding generation produced no valid vectors")
+        for i, chunk, vect in chunks_with_vectors:
             chunk_doc = {
                 "document_id": file_hash,
                 "filename": original_filename

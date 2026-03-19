@@ -52,6 +52,16 @@ GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID")
 GOOGLE_OAUTH_CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET")
 DOCLING_OCR_ENGINE = os.getenv("DOCLING_OCR_ENGINE")
 
+# Docling Docker management
+DOCLING_MANAGED_BY_DOCKER = os.getenv("DOCLING_MANAGED_BY_DOCKER", "false").lower() in (
+    "true",
+    "1",
+    "yes",
+)
+DOCLING_DOCKER_CONTAINER_NAME = os.getenv("DOCLING_DOCKER_CONTAINER_NAME", "openrag-docling")
+DOCLING_DOCKER_COMPOSE_FILE = os.getenv("DOCLING_DOCKER_COMPOSE_FILE")
+DOCLING_WORKERS = get_env_int("DOCLING_WORKERS", 1)
+
 # Ingestion configuration
 DISABLE_INGEST_WITH_LANGFLOW = os.getenv(
     "DISABLE_INGEST_WITH_LANGFLOW", "false"
