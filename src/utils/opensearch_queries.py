@@ -15,8 +15,16 @@ def build_filename_query(filename: str) -> dict:
         A dict containing the OpenSearch query body
     """
     return {
-        "term": {
-            "filename": filename
+        "bool": {
+            "should": [
+                # Preferred exact match for keyword-mapped indices
+                {"term": {"filename.keyword": filename}},
+                # Exact-ish term for legacy mappings where filename is keyword-like
+                {"term": {"filename": filename}},
+                # Fallback for analyzed text mappings
+                {"match_phrase": {"filename": filename}},
+            ],
+            "minimum_should_match": 1,
         }
     }
 

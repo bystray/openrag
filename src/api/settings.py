@@ -18,6 +18,7 @@ from config.settings import (
     LOCALHOST_URL,
     clients,
     get_openrag_config,
+    get_index_name,
     config_manager,
     is_no_auth_mode,
 )
@@ -1385,7 +1386,7 @@ async def _update_langflow_global_variables(config):
                 from utils.index_utils import get_index_name_for_model as _get_index_for_model
 
                 model_index_name = _get_index_for_model(
-                    config.knowledge.index_name, config.knowledge.embedding_model
+                    get_index_name(), config.knowledge.embedding_model
                 )
                 await clients._create_langflow_global_variable(
                     "OPENSEARCH_INDEX_NAME", model_index_name, modify=True

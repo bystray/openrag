@@ -518,34 +518,66 @@ function SearchPage() {
     if (selectedRows.length === 0) return;
 
     try {
-      // Delete each file individually since the API expects one filename at a time
+      // Delete each file individually since the API expects one filename at a time.
+      // Use allSettled so one failed delete does not abort the whole bulk operation.
       const deletePromises = selectedRows.map((row) =>
         deleteDocumentMutation.mutateAsync({ filename: row.filename }),
       );
 
-      const deleteResults = await Promise.all(deletePromises);
+      const settledResults = await Promise.allSettled(deletePromises);
+      const successfulDeletes = settledResults
+        .filter(
+          (
+            result,
+          ): result is PromiseFulfilledResult<{
+            success: boolean;
+            deleted_chunks: number;
+            filename: string;
+            message?: string | null;
+            error?: string | null;
+          }> => result.status === "fulfilled",
+        )
+        .map((result) => result.value);
+      const failedDeletes = settledResults.filter(
+        (result): result is PromiseRejectedResult =>
+          result.status === "rejected",
+      );
+
       await refreshTasks();
       await queryClient.invalidateQueries({ queryKey: ["search"] });
       await queryClient.refetchQueries({ queryKey: ["search"] });
-      await queryClient.invalidateQueries({ queryKey: ["logistics-requests"], exact: false });
+      await queryClient.invalidateQueries({
+        queryKey: ["logistics-requests"],
+        exact: false,
+      });
 
-      const totalDeletedChunks = deleteResults.reduce(
+      const totalDeletedChunks = successfulDeletes.reduce(
         (sum, result) => sum + (result.deleted_chunks || 0),
         0,
       );
-      const filesWithNoDeletion = deleteResults.filter(
+      const filesWithNoDeletion = successfulDeletes.filter(
         (result) => (result.deleted_chunks || 0) === 0,
       );
 
-      if (totalDeletedChunks > 0) {
+      if (failedDeletes.length === 0 && totalDeletedChunks > 0) {
         toast.success(
           `Successfully deleted ${selectedRows.length} document${
             selectedRows.length > 1 ? "s" : ""
           }`,
         );
-      } else {
+      } else if (failedDeletes.length === 0 && totalDeletedChunks === 0) {
         toast.warning(
           "No document chunks were deleted. Files may be owned by another context or already removed.",
+        );
+      } else if (totalDeletedChunks > 0) {
+        toast.warning(
+          `Partially completed: ${successfulDeletes.length} deleted, ${failedDeletes.length} failed.`,
+        );
+      } else {
+        toast.error(
+          `Failed to delete selected documents (${failedDeletes.length} error${
+            failedDeletes.length > 1 ? "s" : ""
+          }).`,
         );
       }
 

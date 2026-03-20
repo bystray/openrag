@@ -927,7 +927,13 @@ def get_embedding_model() -> str:
 
 def get_index_name() -> str:
     """Return the documents alias (base index name) for search, delete, exists."""
-    return get_openrag_config().knowledge.index_name
+    base = get_openrag_config().knowledge.index_name
+    # Recover canonical alias if a model-specific index name was accidentally persisted.
+    # Example: documents_text_embedding_3_large -> documents
+    # Example: documents_text_embedding_3_large_text_embedding_3_small -> documents
+    if base.startswith("documents_text_embedding_"):
+        return "documents"
+    return base
 
 
 def get_index_name_for_model(model: str) -> str:
