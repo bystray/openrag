@@ -23,7 +23,7 @@ class TaskProcessor:
     ) -> bool:
         """
         Check if a document with the given hash already exists in OpenSearch.
-        Consolidated hash checking for all processors.
+        Uses search (not exists API) because exists does not support aliases.
         """
         from config.settings import get_index_name
         import asyncio
@@ -31,10 +31,19 @@ class TaskProcessor:
         max_retries = 3
         retry_delay = 1.0
 
+        search_body = {
+            "query": {"term": {"document_id": file_hash}},
+            "size": 1,
+            "_source": False,
+        }
+
         for attempt in range(max_retries):
             try:
-                exists = await opensearch_client.exists(index=get_index_name(), id=file_hash)
-                return exists
+                resp = await opensearch_client.search(
+                    index=get_index_name(), body=search_body
+                )
+                hits = resp.get("hits", {}).get("hits", [])
+                return len(hits) > 0
             except (asyncio.TimeoutError, Exception) as e:
                 if attempt == max_retries - 1:
                     logger.error(
@@ -179,8 +188,10 @@ class TaskProcessor:
             clients,
             get_embedding_model,
             get_index_name,
+            get_index_name_for_model,
             get_openrag_config,
         )
+        from utils.index_utils import ensure_index_exists_for_model
         from services.document_service import chunk_texts_for_embeddings
         from utils.document_processing import extract_relevant
         from utils.embedding_fields import get_embedding_field_name, ensure_embedding_field_exists
@@ -204,9 +215,14 @@ class TaskProcessor:
         if await self.check_document_exists(file_hash, opensearch_client):
             return {"status": "unchanged", "id": file_hash}
 
+        index_name = get_index_name_for_model(embedding_model)
+
+        # Ensure model-specific index exists (on-demand creation for new models)
+        await ensure_index_exists_for_model(opensearch_client, embedding_model)
+
         # Ensure the embedding field exists for this model
         embedding_field_name = await ensure_embedding_field_exists(
-            opensearch_client, embedding_model, get_index_name()
+            opensearch_client, embedding_model, index_name
         )
 
         logger.info(
@@ -309,7 +325,7 @@ class TaskProcessor:
             chunk_id = f"{file_hash}_{i}"
             try:
                 await opensearch_client.index(
-                    index=get_index_name(), id=chunk_id, body=chunk_doc
+                    index=index_name, id=chunk_id, body=chunk_doc
                 )
             except Exception as e:
                 logger.error(

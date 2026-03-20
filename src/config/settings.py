@@ -926,5 +926,16 @@ def get_embedding_model() -> str:
 
 
 def get_index_name() -> str:
-    """Return the currently configured index name."""
+    """Return the documents alias (base index name) for search, delete, exists."""
     return get_openrag_config().knowledge.index_name
+
+
+def get_index_name_for_model(model: str) -> str:
+    """
+    Return the model-specific index name for writing documents.
+    Use for ingestion; search uses get_index_name() (alias) which spans all indices.
+    """
+    from utils.index_utils import get_index_name_for_model as _get_for_model
+
+    base = get_openrag_config().knowledge.index_name
+    return _get_for_model(base, model)

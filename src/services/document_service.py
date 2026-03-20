@@ -128,7 +128,16 @@ class DocumentService:
             )
 
             try:
-                exists = await opensearch_client.exists(index=get_index_name(), id=file_hash)
+                search_body = {
+                    "query": {"term": {"document_id": file_hash}},
+                    "size": 1,
+                    "_source": False,
+                }
+                resp = await opensearch_client.search(
+                    index=get_index_name(), body=search_body
+                )
+                hits = resp.get("hits", {}).get("hits", [])
+                exists = len(hits) > 0
             except Exception as e:
                 logger.error(
                     "OpenSearch exists check failed", file_hash=file_hash, error=str(e)

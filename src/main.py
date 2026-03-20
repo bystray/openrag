@@ -74,6 +74,7 @@ from config.settings import (
     config_manager,
     get_embedding_model,
     get_index_name,
+    get_index_name_for_model,
     is_no_auth_mode,
     get_openrag_config,
 )
@@ -222,15 +223,17 @@ async def init_index():
             endpoint=getattr(embedding_provider_config, "endpoint", None),
         )
 
-        # Create documents index
-        index_name = get_index_name()
-        if not await clients.opensearch.indices.exists(index=index_name):
+        # Create model-specific index for documents (multi-model: one index per embedding model)
+        alias_name = get_index_name()
+        model_index_name = get_index_name_for_model(embedding_model)
+
+        if not await clients.opensearch.indices.exists(index=model_index_name):
             await clients.opensearch.indices.create(
-                index=index_name, body=dynamic_index_body
+                index=model_index_name, body=dynamic_index_body
             )
             logger.info(
-                "Created OpenSearch index",
-                index_name=index_name,
+                "Created OpenSearch index for model",
+                index_name=model_index_name,
                 embedding_model=embedding_model,
             )
             await TelemetryClient.send_event(
@@ -238,13 +241,18 @@ async def init_index():
             )
         else:
             logger.info(
-                "Index already exists, skipping creation",
-                index_name=index_name,
+                "Index for model already exists, skipping creation",
+                index_name=model_index_name,
                 embedding_model=embedding_model,
             )
             await TelemetryClient.send_event(
                 Category.OPENSEARCH_INDEX, MessageId.ORB_OS_INDEX_EXISTS
             )
+
+        # Ensure alias spans all document indices (for search across models)
+        from utils.index_utils import ensure_documents_alias
+
+        await ensure_documents_alias(clients.opensearch, alias_name, model_index_name)
 
         # Create knowledge filters index
         knowledge_filter_index_name = "knowledge_filters"

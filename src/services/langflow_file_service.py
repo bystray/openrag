@@ -165,11 +165,12 @@ class LangflowFileService:
         )
 
         # Get the current embedding model and provider credentials from config
-        from config.settings import get_openrag_config
+        from config.settings import get_openrag_config, get_index_name_for_model
         from utils.langflow_headers import add_provider_credentials_to_headers
-        
+
         config = get_openrag_config()
         embedding_model = config.knowledge.embedding_model
+        opensearch_index_name = get_index_name_for_model(embedding_model)
 
         headers = {
             "X-Langflow-Global-Var-JWT": str(jwt_token),
@@ -181,6 +182,7 @@ class LangflowFileService:
             "X-Langflow-Global-Var-MIMETYPE": mimetype,
             "X-Langflow-Global-Var-FILESIZE": str(file_size_bytes),
             "X-Langflow-Global-Var-SELECTED_EMBEDDING_MODEL": str(embedding_model),
+            "X-Langflow-Global-Var-OPENSEARCH_INDEX_NAME": str(opensearch_index_name),
             "X-Langflow-Global-Var-DOCUMENT_ID": str(document_id) if document_id else "",
             "X-Langflow-Global-Var-SOURCE_URL": str(source_url) if source_url else "",
         }
@@ -296,11 +298,12 @@ class LangflowFileService:
         if tweaks:
             payload["tweaks"] = tweaks
 
-        from config.settings import get_openrag_config
+        from config.settings import get_openrag_config, get_index_name_for_model
         from utils.langflow_headers import add_provider_credentials_to_headers
 
         config = get_openrag_config()
         embedding_model = config.knowledge.embedding_model
+        opensearch_index_name = get_index_name_for_model(embedding_model)
         headers = {
             "X-Langflow-Global-Var-JWT": str(jwt_token),
             "X-Langflow-Global-Var-OWNER": str(owner),
@@ -308,12 +311,11 @@ class LangflowFileService:
             "X-Langflow-Global-Var-OWNER_EMAIL": str(owner_email),
             "X-Langflow-Global-Var-CONNECTOR_TYPE": str(connector_type),
             "X-Langflow-Global-Var-SELECTED_EMBEDDING_MODEL": str(embedding_model),
-
-            "X-Langflow-Global-Var-DOCUMENT_ID":"",
+            "X-Langflow-Global-Var-OPENSEARCH_INDEX_NAME": str(opensearch_index_name),
+            "X-Langflow-Global-Var-DOCUMENT_ID": "",
             "X-Langflow-Global-Var-SOURCE_URL": str(docs_url),
-    
-            "X-Langflow-Global-Var-ALLOWED_USERS": json.dumps( []),
-            "X-Langflow-Global-Var-ALLOWED_GROUPS": json.dumps( []),
+            "X-Langflow-Global-Var-ALLOWED_USERS": json.dumps([]),
+            "X-Langflow-Global-Var-ALLOWED_GROUPS": json.dumps([]),
         }
         add_provider_credentials_to_headers(headers, config)
 
