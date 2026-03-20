@@ -938,4 +938,9 @@ def get_index_name_for_model(model: str) -> str:
     from utils.index_utils import get_index_name_for_model as _get_for_model
 
     base = get_openrag_config().knowledge.index_name
+    # If a model-specific index was accidentally saved as base, recover alias.
+    # Example of broken base: documents_text_embedding_3_large
+    # Desired base alias: documents
+    if base.startswith("documents_text_embedding_"):
+        base = "documents"
     return _get_for_model(base, model)

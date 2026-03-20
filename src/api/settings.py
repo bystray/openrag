@@ -1379,6 +1379,26 @@ async def _update_langflow_global_variables(config):
             logger.info(
                 f"Set SELECTED_EMBEDDING_MODEL global variable to {config.knowledge.embedding_model}"
             )
+            # Keep OpenSearch index routing in sync with the selected embedding model.
+            # Langflow flow uses OPENSEARCH_INDEX_NAME to decide where to write vectors.
+            try:
+                from utils.index_utils import get_index_name_for_model as _get_index_for_model
+
+                model_index_name = _get_index_for_model(
+                    config.knowledge.index_name, config.knowledge.embedding_model
+                )
+                await clients._create_langflow_global_variable(
+                    "OPENSEARCH_INDEX_NAME", model_index_name, modify=True
+                )
+                logger.info(
+                    f"Set OPENSEARCH_INDEX_NAME global variable to {model_index_name}"
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to update OPENSEARCH_INDEX_NAME for selected embedding model",
+                    embedding_model=config.knowledge.embedding_model,
+                    error=str(e),
+                )
 
     except Exception as e:
         logger.error(f"Failed to update Langflow global variables: {str(e)}")

@@ -103,7 +103,16 @@ class SessionManager:
                 self.algorithm = "HS256"
         else:
             # Fall back to file-based RSA keys
-            self._load_rsa_keys()
+            try:
+                self._load_rsa_keys()
+            except Exception as e:
+                logger.warning(
+                    "Falling back to ephemeral RSA keys because key files are unavailable",
+                    error=str(e),
+                    private_key_path=self.private_key_path,
+                    public_key_path=self.public_key_path,
+                )
+                self._generate_ephemeral_rsa_keys()
             self.algorithm = "RS256"
         logger.info(f"Initialized JWT signing with {self.algorithm}")
 
@@ -125,6 +134,16 @@ class SessionManager:
             raise Exception(f"RSA key files not found: {e}")
         except Exception as e:
             raise Exception(f"Failed to load RSA keys: {e}")
+
+    def _generate_ephemeral_rsa_keys(self):
+        """Generate in-memory RSA keys as a safe startup fallback."""
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        self.private_key = key
+        self.public_key = key.public_key()
+        self.public_key_pem = self.public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode()
 
     async def get_user_info_from_token(
         self, access_token: str

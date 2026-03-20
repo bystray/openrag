@@ -12,6 +12,21 @@ MAX_EMBED_RETRIES = 3
 EMBED_RETRY_INITIAL_DELAY = 1.0
 EMBED_RETRY_MAX_DELAY = 8.0
 
+EXACT_FILTER_FIELD_MAPPING = {
+    "data_sources": "filename.keyword",
+    "document_types": "mimetype.keyword",
+    "owners": "owner.keyword",
+    "connector_types": "connector_type.keyword",
+}
+
+AGGREGATION_FIELDS = {
+    "data_sources": "filename.keyword",
+    "document_types": "mimetype.keyword",
+    "owners": "owner.keyword",
+    "connector_types": "connector_type.keyword",
+    "embedding_models": "embedding_model.keyword",
+}
+
 
 class SearchService:
     def __init__(self, session_manager=None):
@@ -73,18 +88,12 @@ class SearchService:
             # Build filter clauses first so we can use them in model detection
             filter_clauses = []
             if filters:
-                # Map frontend filter names to backend field names
-                field_mapping = {
-                    "data_sources": "filename",
-                    "document_types": "mimetype",
-                    "owners": "owner",
-                    "connector_types": "connector_type",
-                }
-
                 for filter_key, values in filters.items():
                     if values is not None and isinstance(values, list):
                         # Map frontend key to backend field name
-                        field_name = field_mapping.get(filter_key, filter_key)
+                        field_name = EXACT_FILTER_FIELD_MAPPING.get(
+                            filter_key, filter_key
+                        )
 
                         if len(values) == 0:
                             # Empty array means "match nothing" - use impossible filter
@@ -105,7 +114,7 @@ class SearchService:
                     "aggs": {
                         "embedding_models": {
                             "terms": {
-                                "field": "embedding_model",
+                                "field": AGGREGATION_FIELDS["embedding_models"],
                                 "size": 10
                             }
                         }
@@ -232,18 +241,12 @@ class SearchService:
             # Wildcard query - no embedding needed
             filter_clauses = []
             if filters:
-                # Map frontend filter names to backend field names
-                field_mapping = {
-                    "data_sources": "filename",
-                    "document_types": "mimetype",
-                    "owners": "owner",
-                    "connector_types": "connector_type",
-                }
-
                 for filter_key, values in filters.items():
                     if values is not None and isinstance(values, list):
                         # Map frontend key to backend field name
-                        field_name = field_mapping.get(filter_key, filter_key)
+                        field_name = EXACT_FILTER_FIELD_MAPPING.get(
+                            filter_key, filter_key
+                        )
 
                         if len(values) == 0:
                             # Empty array means "match nothing" - use impossible filter
@@ -330,11 +333,30 @@ class SearchService:
         search_body = {
             "query": query_block,
             "aggs": {
-                "data_sources": {"terms": {"field": "filename", "size": 20}},
-                "document_types": {"terms": {"field": "mimetype", "size": 10}},
-                "owners": {"terms": {"field": "owner", "size": 10}},
-                "connector_types": {"terms": {"field": "connector_type", "size": 10}},
-                "embedding_models": {"terms": {"field": "embedding_model", "size": 10}},
+                "data_sources": {
+                    "terms": {"field": AGGREGATION_FIELDS["data_sources"], "size": 20}
+                },
+                "document_types": {
+                    "terms": {
+                        "field": AGGREGATION_FIELDS["document_types"],
+                        "size": 10,
+                    }
+                },
+                "owners": {
+                    "terms": {"field": AGGREGATION_FIELDS["owners"], "size": 10}
+                },
+                "connector_types": {
+                    "terms": {
+                        "field": AGGREGATION_FIELDS["connector_types"],
+                        "size": 10,
+                    }
+                },
+                "embedding_models": {
+                    "terms": {
+                        "field": AGGREGATION_FIELDS["embedding_models"],
+                        "size": 10,
+                    }
+                },
             },
             "_source": [
                 "filename",
@@ -361,6 +383,7 @@ class SearchService:
 
         # Prepare fallback search body without num_candidates for clusters that don't support it
         fallback_search_body = None
+        fallback_without_aggs = None
         if not is_wildcard_match_all:
             try:
                 fallback_search_body = copy.deepcopy(search_body)
@@ -375,6 +398,11 @@ class SearchService:
                                 params.pop("num_candidates", None)
             except (KeyError, IndexError, AttributeError, TypeError):
                 fallback_search_body = None
+        try:
+            fallback_without_aggs = copy.deepcopy(search_body)
+            fallback_without_aggs.pop("aggs", None)
+        except (AttributeError, TypeError):
+            fallback_without_aggs = None
 
         # Authentication required - DLS will handle document filtering automatically
         logger.debug(
@@ -424,23 +452,55 @@ class SearchService:
                     )
                     raise
             else:
-                logger.error(
-                    "OpenSearch query failed", error=error_message, search_body=search_body
+                can_retry_without_aggs = (
+                    fallback_without_aggs is not None
+                    and "fielddata is disabled" in error_message.lower()
                 )
-                raise
+                if can_retry_without_aggs:
+                    logger.warning(
+                        "OpenSearch aggregations failed due to fielddata/mapping mismatch; retrying without aggregations"
+                    )
+                    results = await opensearch_client.search(
+                        index=get_index_name(),
+                        body=fallback_without_aggs,
+                        params=search_params,
+                    )
+                else:
+                    logger.error(
+                        "OpenSearch query failed",
+                        error=error_message,
+                        search_body=search_body,
+                    )
+                    raise
         except Exception as e:
-            root_cause = None
-            if hasattr(e, "info") and isinstance(getattr(e, "info"), dict):
-                err = getattr(e, "info", {}).get("error", {})
-                root_cause = err.get("root_cause") or err.get("reason", str(e))
-            logger.error(
-                "OpenSearch query failed",
-                error=str(e),
-                root_cause=root_cause,
-                search_body=search_body,
+            error_message = str(e)
+            can_retry_without_aggs = (
+                fallback_without_aggs is not None
+                and "fielddata is disabled" in error_message.lower()
             )
-            # Re-raise the exception so the API returns the error to frontend
-            raise
+            if can_retry_without_aggs:
+                logger.warning(
+                    "OpenSearch query failed with non-RequestError fielddata issue; retrying without aggregations"
+                )
+                results = await opensearch_client.search(
+                    index=get_index_name(),
+                    body=fallback_without_aggs,
+                    params=search_params,
+                )
+                # Continue with transformed results below
+            else:
+                root_cause = None
+                if hasattr(e, "info") and isinstance(getattr(e, "info"), dict):
+                    err = getattr(e, "info", {}).get("error", {})
+                    root_cause = err.get("root_cause") or err.get("reason", str(e))
+                logger.error(
+                    "OpenSearch query failed",
+                    error=error_message,
+                    root_cause=root_cause,
+                    search_body=search_body,
+                )
+                # Re-raise the exception so the API returns the error to frontend
+                raise
 
         # Transform results (keep for backward compatibility)
         chunks = []
