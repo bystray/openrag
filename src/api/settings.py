@@ -1380,8 +1380,10 @@ async def _update_langflow_global_variables(config):
             logger.info(
                 f"Set SELECTED_EMBEDDING_MODEL global variable to {config.knowledge.embedding_model}"
             )
-            # Keep OpenSearch index routing in sync with the selected embedding model.
-            # Langflow flow uses OPENSEARCH_INDEX_NAME to decide where to write vectors.
+            # Langflow UI default for OPENSEARCH_INDEX_NAME: model-specific index (ingest writes here).
+            # Backend overrides per request: ingest via X-Langflow-Global-Var-OPENSEARCH_INDEX_NAME
+            # (see LangflowFileService); chat/nudges via X-LANGFLOW-GLOBAL-VAR-OPENSEARCH_INDEX_NAME
+            # with the documents alias (see ChatService) so retrieval matches Knowledge search.
             try:
                 from utils.index_utils import get_index_name_for_model as _get_index_for_model
 

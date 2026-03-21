@@ -70,13 +70,16 @@ class ChatService:
             extra_headers["X-LANGFLOW-GLOBAL-VAR-JWT"] = jwt_token
 
         # Pass the selected embedding model as a global variable
-        from config.settings import get_openrag_config
+        from config.settings import get_openrag_config, get_index_name
         from utils.langflow_headers import add_provider_credentials_to_headers
-        
+        from utils.openrag_query_filters import build_opensearch_filter_clauses
+
         config = get_openrag_config()
         embedding_model = config.knowledge.embedding_model
         extra_headers["X-LANGFLOW-GLOBAL-VAR-SELECTED_EMBEDDING_MODEL"] = embedding_model
-        
+        # Retrieval must use the documents alias (same as SearchService / Knowledge), not a single model index.
+        extra_headers["X-LANGFLOW-GLOBAL-VAR-OPENSEARCH_INDEX_NAME"] = get_index_name()
+
         # Add provider credentials to headers
         add_provider_credentials_to_headers(extra_headers, config)
         logger.debug(f"[LF] Extra headers {extra_headers}")
@@ -94,27 +97,7 @@ class ChatService:
         # Build the complete filter expression like the search service does
         filter_expression = {}
         if filters:
-            filter_clauses = []
-            # Map frontend filter names to backend field names
-            field_mapping = {
-                "data_sources": "filename",
-                "document_types": "mimetype",
-                "owners": "owner",
-                "connector_types": "connector_type",
-            }
-
-            for filter_key, values in filters.items():
-                if values is not None and isinstance(values, list) and len(values) > 0:
-                    # Map frontend key to backend field name
-                    field_name = field_mapping.get(filter_key, filter_key)
-
-                    if len(values) == 1:
-                        # Single value filter
-                        filter_clauses.append({"term": {field_name: values[0]}})
-                    else:
-                        # Multiple values filter
-                        filter_clauses.append({"terms": {field_name: values}})
-
+            filter_clauses = build_opensearch_filter_clauses(filters)
             if filter_clauses:
                 filter_expression["filter"] = filter_clauses
 
@@ -195,13 +178,15 @@ class ChatService:
             extra_headers["X-LANGFLOW-GLOBAL-VAR-JWT"] = jwt_token
 
         # Pass the selected embedding model as a global variable
-        from config.settings import get_openrag_config
+        from config.settings import get_openrag_config, get_index_name
         from utils.langflow_headers import add_provider_credentials_to_headers
-        
+        from utils.openrag_query_filters import build_opensearch_filter_clauses
+
         config = get_openrag_config()
         embedding_model = config.knowledge.embedding_model
         extra_headers["X-LANGFLOW-GLOBAL-VAR-SELECTED_EMBEDDING_MODEL"] = embedding_model
-        
+        extra_headers["X-LANGFLOW-GLOBAL-VAR-OPENSEARCH_INDEX_NAME"] = get_index_name()
+
         # Add provider credentials to headers
         add_provider_credentials_to_headers(extra_headers, config)
 
@@ -211,26 +196,7 @@ class ChatService:
         filter_clauses = []
 
         if filters:
-            # Map frontend filter names to backend field names
-            field_mapping = {
-                "data_sources": "filename",
-                "document_types": "mimetype",
-                "owners": "owner",
-                "connector_types": "connector_type",
-            }
-
-            for filter_key, values in filters.items():
-                if values is not None and isinstance(values, list) and len(values) > 0:
-                    # Map frontend key to backend field name
-                    field_name = field_mapping.get(filter_key, filter_key)
-
-                    if len(values) == 1:
-                        # Single value filter
-                        filter_clauses.append({"term": {field_name: values[0]}})
-                    else:
-                        # Multiple values filter
-                        filter_clauses.append({"terms": {field_name: values}})
-
+            filter_clauses = build_opensearch_filter_clauses(filters)
             if filter_clauses:
                 has_user_filters = True
 
@@ -325,13 +291,14 @@ class ChatService:
                 extra_headers["X-LANGFLOW-GLOBAL-VAR-JWT"] = jwt_token
 
             # Pass the selected embedding model as a global variable
-            from config.settings import get_openrag_config
+            from config.settings import get_openrag_config, get_index_name
             from utils.langflow_headers import add_provider_credentials_to_headers
-            
+
             config = get_openrag_config()
             embedding_model = config.knowledge.embedding_model
             extra_headers["X-LANGFLOW-GLOBAL-VAR-SELECTED_EMBEDDING_MODEL"] = embedding_model
-            
+            extra_headers["X-LANGFLOW-GLOBAL-VAR-OPENSEARCH_INDEX_NAME"] = get_index_name()
+
             # Add provider credentials to headers
             add_provider_credentials_to_headers(extra_headers, config)
             

@@ -987,6 +987,19 @@ flow-upload: ## Upload flow to Langflow
 		-d @$(FLOW_FILE)
 	@echo "$(PURPLE)Flow uploaded.$(NC)"
 
+langflow-sync-check: ## Compare repo flows/*.json IDs with LANGFLOW_* in .env (no Docker required)
+	@uv run python scripts/langflow_dev_sync_check.py
+
+langflow-soft-rebuild: ## Rebuild and recreate Langflow container; reloads flows from OPENRAG_FLOWS_PATH (does not delete OpenSearch data)
+	@echo "$(YELLOW)Rebuilding Langflow...$(NC)"
+	docker compose build langflow
+	docker compose up -d --force-recreate langflow
+	@echo "$(YELLOW)Waiting for /health...$(NC)"
+	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 15 18 21 24 27 30; do curl -sf http://localhost:$${LANGFLOW_PORT:-7860}/health >/dev/null && echo "$(GREEN)Langflow healthy$(NC)" && exit 0; sleep 3; done; echo "$(RED)Langflow /health not ready$(NC)"; exit 1
+
+langflow-reimport-flows: ## Recreate Langflow only (same as soft rebuild; JSON re-imported on startup)
+	@$(MAKE) langflow-soft-rebuild
+
 ######################
 # SETUP
 ######################

@@ -514,8 +514,8 @@
                         "title": "Input Value"
                       }
                     },
-                    "description": "This flow is to ingest the URL to open search.",
-                    "display_description": "This flow is to ingest the URL to open search.",
+                    "description": "Flow ингеста URL в OpenSearch.",
+                    "display_description": "Flow ингеста URL в OpenSearch.",
                     "display_name": "opensearch_url_ingestion_flow",
                     "name": "opensearch_url_ingestion_flow",
                     "readonly": false,
@@ -567,7 +567,7 @@
         "data": {
           "id": "note-Wg9xF",
           "node": {
-            "description": "## README\n\nThis flow generates answers for OpenRAG's chat, informed by the context stored in OpenSearch.\nIn this flow, the [**Langflow Agent** component](https://docs.langflow.org/agents) uses the connected [**Language Model** component](https://docs.langflow.org/components-models) to select the correct tool to complete requests.\n* If the Agent determines your request requires external knowledge, it will embed your query with the [**Embedding Model** component](https://docs.langflow.org/components-embedding-models) and query your [OpenSearch knowledge](https://docs.openr.ag/knowledge).\n\n* If the Agent determines your request requires a web search, it selects the [**MCP Tools** component](https://docs.langflow.org/mcp-client#mcp-tools-parameters) to fetch web content with the [OpenSearch URL ingestion flow](https://docs.openr.ag/ingestion#url-flow).\n\nUsing the retrieved data, the Agent generates a response with the connected [**Language Model** component](https://docs.langflow.org/components-models) and sends it to the [**Chat Output** component](https://docs.langflow.org/components-io).\n\nFor more information, see the [OpenRAG docs](https://docs.openr.ag/agents).",
+            "description": "## README\n\nЭтот flow формирует ответы чата OpenRAG на основе контекста, хранящегося в OpenSearch.\nЗдесь [**компонент Langflow Agent**](https://docs.langflow.org/agents) вместе с [**языковой моделью**](https://docs.langflow.org/components-models) выбирает нужный инструмент для запроса.\n* Если нужны знания из корпуса, агент строит эмбеддинг запроса через [**Embedding Model**](https://docs.langflow.org/components-embedding-models) и ищет в [базе знаний OpenSearch](https://docs.openr.ag/knowledge).\n\n* Если нужен веб-поиск, агент использует [**MCP Tools**](https://docs.langflow.org/mcp-client#mcp-tools-parameters) и [flow ингеста URL в OpenSearch](https://docs.openr.ag/ingestion#url-flow).\n\nПо найденным данным агент отвечает через [**языковую модель**](https://docs.langflow.org/components-models) и выводит результат в [**Chat Output**](https://docs.langflow.org/components-io).\n\nПодробнее: [документация OpenRAG](https://docs.openr.ag/agents).",
             "display_name": "",
             "documentation": "",
             "template": {
@@ -2810,7 +2810,7 @@
       },
       {
         "data": {
-          "description": "Store and search documents using OpenSearch with multi-model hybrid semantic and keyword search. To search use the tools search_documents and raw_search. Search documents takes a query for vector search, for example\n  {search_query: \"components in openrag\"}",
+          "description": "Хранение и поиск документов в OpenSearch: гибридный семантический и полнотекстовый поиск по нескольким моделям эмбеддингов. Используйте инструменты search_documents и raw_search. Для search_documents передайте текстовый запрос для векторного поиска, например:\n  {search_query: \"компоненты в openrag\"}",
           "display_name": "OpenSearch (Multi-Model Multi-Embedding)",
           "id": "OpenSearchVectorStoreComponentMultimodalMultiEmbedding-TyvvE",
           "node": {
@@ -2821,7 +2821,7 @@
             "beta": false,
             "conditional_paths": [],
             "custom_fields": {},
-            "description": "Store and search documents using OpenSearch with multi-model hybrid semantic and keyword search. To search use the tools search_documents and raw_search. Search documents takes a query for vector search, for example\n  {search_query: \"components in openrag\"}",
+            "description": "Хранение и поиск документов в OpenSearch: гибридный семантический и полнотекстовый поиск по нескольким моделям эмбеддингов. Используйте инструменты search_documents и raw_search. Для search_documents передайте текстовый запрос для векторного поиска, например:\n  {search_query: \"компоненты в openrag\"}",
             "display_name": "OpenSearch (Multi-Model Multi-Embedding)",
             "documentation": "",
             "edited": false,
@@ -3471,8 +3471,8 @@
                         "type": "string"
                       }
                     },
-                    "description": "Store and search documents using OpenSearch with multi-model hybrid semantic and keyword search. To search use the tools search_documents and raw_search. Search documents takes a query for vector search, for example\n  {search_query: \"components in openrag\"}",
-                    "display_description": "Store and search documents using OpenSearch with multi-model hybrid semantic and keyword search. To search use the tools search_documents and raw_search. Search documents takes a query for vector search, for example\n  {search_query: \"components in openrag\"}",
+                    "description": "Хранение и поиск документов в OpenSearch: гибридный семантический и полнотекстовый поиск по нескольким моделям эмбеддингов. Используйте инструменты search_documents и raw_search. Для search_documents передайте текстовый запрос для векторного поиска, например:\n  {search_query: \"компоненты в openrag\"}",
+                    "display_description": "Хранение и поиск документов в OpenSearch: гибридный семантический и полнотекстовый поиск по нескольким моделям эмбеддингов. Используйте инструменты search_documents и raw_search. Для search_documents передайте текстовый запрос для векторного поиска, например:\n  {search_query: \"компоненты в openrag\"}",
                     "display_name": "search_documents",
                     "name": "search_documents",
                     "readonly": false,
@@ -3491,8 +3491,8 @@
                         "type": "string"
                       }
                     },
-                    "description": "Store and search documents using OpenSearch with multi-model hybrid semantic and keyword search. To search use the tools search_documents and raw_search. Search documents takes a query for vector search, for example\n  {search_query: \"components in openrag\"}",
-                    "display_description": "Store and search documents using OpenSearch with multi-model hybrid semantic and keyword search. To search use the tools search_documents and raw_search. Search documents takes a query for vector search, for example\n  {search_query: \"components in openrag\"}",
+                    "description": "Хранение и поиск документов в OpenSearch: гибридный семантический и полнотекстовый поиск по нескольким моделям эмбеддингов. Используйте инструменты search_documents и raw_search. Для search_documents передайте текстовый запрос для векторного поиска, например:\n  {search_query: \"компоненты в openrag\"}",
+                    "display_description": "Хранение и поиск документов в OpenSearch: гибридный семантический и полнотекстовый поиск по нескольким моделям эмбеддингов. Используйте инструменты search_documents и raw_search. Для search_documents передайте текстовый запрос для векторного поиска, например:\n  {search_query: \"компоненты в openrag\"}",
                     "display_name": "raw_search",
                     "name": "raw_search",
                     "readonly": false,
@@ -3511,8 +3511,8 @@
                         "type": "string"
                       }
                     },
-                    "description": "Store and search documents using OpenSearch with multi-model hybrid semantic and keyword search. To search use the tools search_documents and raw_search. Search documents takes a query for vector search, for example\n  {search_query: \"components in openrag\"}",
-                    "display_description": "Store and search documents using OpenSearch with multi-model hybrid semantic and keyword search. To search use the tools search_documents and raw_search. Search documents takes a query for vector search, for example\n  {search_query: \"components in openrag\"}",
+                    "description": "Хранение и поиск документов в OpenSearch: гибридный семантический и полнотекстовый поиск по нескольким моделям эмбеддингов. Используйте инструменты search_documents и raw_search. Для search_documents передайте текстовый запрос для векторного поиска, например:\n  {search_query: \"компоненты в openrag\"}",
+                    "display_description": "Хранение и поиск документов в OpenSearch: гибридный семантический и полнотекстовый поиск по нескольким моделям эмбеддингов. Используйте инструменты search_documents и raw_search. Для search_documents передайте текстовый запрос для векторного поиска, например:\n  {search_query: \"компоненты в openrag\"}",
                     "display_name": "as_vector_store",
                     "name": "as_vector_store",
                     "readonly": false,
@@ -5216,13 +5216,13 @@
       "zoom": 0.4709758466489534
     }
   },
-  "description": "OpenRAG OpenSearch Agent",
+  "description": "Агент OpenRAG для поиска и ответов по базе знаний OpenSearch.",
   "endpoint_name": null,
   "id": "1098eea1-6649-4e1d-aed1-b77249fb8dd0",
   "is_component": false,
   "last_tested_version": "1.8.0",
   "locked": true,
-  "name": "OpenRAG OpenSearch Agent Flow",
+  "name": "OpenRAG — агент OpenSearch (чат)",
   "tags": [
     "assistants",
     "agents"

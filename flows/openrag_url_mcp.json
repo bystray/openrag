@@ -3659,7 +3659,7 @@
       },
       {
         "data": {
-          "description": "Store and search documents using OpenSearch with multi-model hybrid semantic and keyword search. To search use the tools search_documents and raw_search. Search documents takes a query for vector search, for example\n  {search_query: \"components in openrag\"}",
+          "description": "Хранение и поиск документов в OpenSearch: гибридный семантический и полнотекстовый поиск по нескольким моделям эмбеддингов. Используйте инструменты search_documents и raw_search. Для search_documents передайте текстовый запрос для векторного поиска, например:\n  {search_query: \"компоненты в openrag\"}",
           "display_name": "OpenSearch (Multi-Model Multi-Embedding)",
           "id": "OpenSearchVectorStoreComponentMultimodalMultiEmbedding-PMGGV",
           "node": {
@@ -3670,7 +3670,7 @@
             "beta": false,
             "conditional_paths": [],
             "custom_fields": {},
-            "description": "Store and search documents using OpenSearch with multi-model hybrid semantic and keyword search. To search use the tools search_documents and raw_search. Search documents takes a query for vector search, for example\n  {search_query: \"components in openrag\"}",
+            "description": "Хранение и поиск документов в OpenSearch: гибридный семантический и полнотекстовый поиск по нескольким моделям эмбеддингов. Используйте инструменты search_documents и raw_search. Для search_documents передайте текстовый запрос для векторного поиска, например:\n  {search_query: \"компоненты в openrag\"}",
             "display_name": "OpenSearch (Multi-Model Multi-Embedding)",
             "documentation": "",
             "edited": false,
@@ -7097,14 +7097,14 @@
       "zoom": 0.2750946523415342
     }
   },
-  "description": "This flow is to ingest the URL to open search.",
+  "description": "Ингест страниц по URL в OpenSearch (обход ссылок, разбиение, эмбеддинги).",
   "endpoint_name": null,
   "id": "72c3d17c-2dac-4a73-b48a-6518473d7830",
   "is_component": false,
   "mcp_enabled": true,
   "last_tested_version": "1.8.0",
   "locked": true,
-  "name": "OpenSearch URL Ingestion Flow",
+  "name": "OpenSearch — ингест URL",
   "tags": [
     "openai",
     "astradb",

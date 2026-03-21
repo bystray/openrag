@@ -5,19 +5,13 @@ from agentd.tool_decorator import tool
 from config.settings import EMBED_MODEL, clients, get_embedding_model, get_index_name, WATSONX_EMBEDDING_DIMENSIONS
 from auth_context import get_auth_context
 from utils.logging_config import get_logger
+from utils.openrag_query_filters import EXACT_FILTER_FIELD_MAPPING, build_opensearch_filter_clauses
 
 logger = get_logger(__name__)
 
 MAX_EMBED_RETRIES = 3
 EMBED_RETRY_INITIAL_DELAY = 1.0
 EMBED_RETRY_MAX_DELAY = 8.0
-
-EXACT_FILTER_FIELD_MAPPING = {
-    "data_sources": "filename.keyword",
-    "document_types": "mimetype.keyword",
-    "owners": "owner.keyword",
-    "connector_types": "connector_type.keyword",
-}
 
 AGGREGATION_FIELDS = {
     "data_sources": "filename.keyword",
@@ -86,26 +80,7 @@ class SearchService:
 
         if not is_wildcard_match_all:
             # Build filter clauses first so we can use them in model detection
-            filter_clauses = []
-            if filters:
-                for filter_key, values in filters.items():
-                    if values is not None and isinstance(values, list):
-                        # Map frontend key to backend field name
-                        field_name = EXACT_FILTER_FIELD_MAPPING.get(
-                            filter_key, filter_key
-                        )
-
-                        if len(values) == 0:
-                            # Empty array means "match nothing" - use impossible filter
-                            filter_clauses.append(
-                                {"term": {field_name: "__IMPOSSIBLE_VALUE__"}}
-                            )
-                        elif len(values) == 1:
-                            # Single value filter
-                            filter_clauses.append({"term": {field_name: values[0]}})
-                        else:
-                            # Multiple values filter
-                            filter_clauses.append({"terms": {field_name: values}})
+            filter_clauses = build_opensearch_filter_clauses(filters)
 
             try:
                 # Build aggregation query with filters applied
@@ -239,26 +214,7 @@ class SearchService:
             )
         else:
             # Wildcard query - no embedding needed
-            filter_clauses = []
-            if filters:
-                for filter_key, values in filters.items():
-                    if values is not None and isinstance(values, list):
-                        # Map frontend key to backend field name
-                        field_name = EXACT_FILTER_FIELD_MAPPING.get(
-                            filter_key, filter_key
-                        )
-
-                        if len(values) == 0:
-                            # Empty array means "match nothing" - use impossible filter
-                            filter_clauses.append(
-                                {"term": {field_name: "__IMPOSSIBLE_VALUE__"}}
-                            )
-                        elif len(values) == 1:
-                            # Single value filter
-                            filter_clauses.append({"term": {field_name: values[0]}})
-                        else:
-                            # Multiple values filter
-                            filter_clauses.append({"terms": {field_name: values}})
+            filter_clauses = build_opensearch_filter_clauses(filters)
 
         # Build query body
         if is_wildcard_match_all:
