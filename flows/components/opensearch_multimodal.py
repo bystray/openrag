@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -733,6 +734,37 @@ class OpenSearchVectorStoreComponentMultimodalMultiEmbedding(LCVectorStoreCompon
         return return_ids
 
     # ---------- auth / client ----------
+    def _resolve_jwt_token(self) -> str:
+        """Resolve JWT from component field, env, or Langflow global injection.
+
+        Flow JSON often uses placeholder value ``JWT`` (meaning: use global var).
+        Container env may set ``JWT``; request headers inject ``JWT`` at run time.
+        Strip a leading ``Bearer `` so we do not send ``Bearer Bearer ...``.
+        """
+        raw = (self.jwt_token or "").strip()
+        if raw in ("", "JWT", "None", "null", "none") or raw.lower() == "none":
+            raw = (os.environ.get("JWT") or "").strip()
+        if raw in ("JWT", "None", "null", "none") or raw.lower() == "none":
+            raw = ""
+        if raw.lower().startswith("bearer "):
+            raw = raw[7:].strip()
+        return raw
+
+    def _resolve_basic_credentials(self) -> tuple[str, str]:
+        """Username/password for basic auth and for jwt→basic fallback.
+
+        Flow JSON mistakes sometimes set username to the placeholder ``JWT``.
+        Langflow injects ``OPENSEARCH_PASSWORD`` via container env — use it when
+        the node password field is empty.
+        """
+        user = (self.username or "").strip()
+        if not user or user.upper() == "JWT":
+            user = (os.environ.get("OPENSEARCH_USERNAME") or "admin").strip()
+        pwd = (self.password or "").strip()
+        if not pwd:
+            pwd = (os.environ.get("OPENSEARCH_PASSWORD") or "").strip()
+        return user, pwd
+
     def _build_auth_kwargs(self) -> dict[str, Any]:
         """Build authentication configuration for OpenSearch client.
 
@@ -747,18 +779,44 @@ class OpenSearchVectorStoreComponentMultimodalMultiEmbedding(LCVectorStoreCompon
         """
         mode = (self.auth_mode or "basic").strip().lower()
         if mode == "jwt":
-            token = (self.jwt_token or "").strip()
+            token = self._resolve_jwt_token()
+            user, pwd = self._resolve_basic_credentials()
+            # Dev / Playground: no JWT but admin password on node — use basic to avoid 401
+            if not token and user and pwd:
+                logger.warning(
+                    "[OpenSearchMultimodal] auth_mode=jwt but JWT empty after resolve; "
+                    "using basic auth from Username/Password fields (set JWT global or paste token for JWT mode)."
+                )
+                self.log(
+                    "[AUTH] jwt mode: empty JWT → fallback to basic "
+                    f"(user={user!r}, has_password={bool(pwd)})"
+                )
+                return {"http_auth": (user, pwd)}
             if not token:
-                msg = "Auth Mode is 'jwt' but no jwt_token was provided."
+                msg = (
+                    "Auth Mode is 'jwt' but no jwt_token was provided. "
+                    "Set global JWT via backend chat or paste a token in the OpenSearch node; "
+                    "or switch Authentication Mode to 'basic' with admin credentials."
+                )
                 raise ValueError(msg)
             header_name = (self.jwt_header or "Authorization").strip()
             header_value = f"Bearer {token}" if self.bearer_prefix else token
+            preview = f"{token[:8]}…" if len(token) > 12 else "(short)"
+            logger.info(
+                "[OpenSearchMultimodal] OpenSearch JWT auth",
+                auth_mode="jwt",
+                header=header_name,
+                bearer_prefix=bool(self.bearer_prefix),
+                token_preview=preview,
+            )
+            self.log(f"[AUTH] jwt mode: header={header_name}, token_preview={preview}")
             return {"headers": {header_name: header_value}}
-        user = (self.username or "").strip()
-        pwd = (self.password or "").strip()
+        user, pwd = self._resolve_basic_credentials()
         if not user or not pwd:
             msg = "Auth Mode is 'basic' but username/password are missing."
             raise ValueError(msg)
+        logger.info("[OpenSearchMultimodal] OpenSearch basic auth", auth_mode="basic", user=user)
+        self.log(f"[AUTH] basic mode: user={user!r}")
         return {"http_auth": (user, pwd)}
 
     def build_client(self) -> OpenSearch:

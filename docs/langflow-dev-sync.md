@@ -32,6 +32,18 @@ OPENRAG_FLOWS_PATH=./flows
 
 Backend читает flow по **ID из `.env`**, а не по имени файла. Имя файла в UI не отображается; в списке видно **name** из JSON и UUID в URL `/flow/<uuid>`.
 
+## JWT и OpenSearch (401 в Playground / chat)
+
+- **Backend → Langflow**: в запрос к API Langflow передаются заголовки `X-Langflow-Global-Var-JWT` и `X-LANGFLOW-GLOBAL-VAR-JWT` (оба варианта имени на случай разных версий клиента). Глобальная переменная в flow — **`JWT`**; узел OpenSearch (Multi-Model) в режиме **jwt** читает поле **JWT Token** (часто плейсхолдер `JWT` → подстановка из глобальной переменной).
+- **Docker**: в `docker-compose` для Langflow **не** задавайте `JWT=None` — иначе в окружение попадает строка, которая ломает подстановку токена из запроса и даёт **401 Unauthorized** в OpenSearch.
+- **Playground**: JWT из UI сессии OpenRAG **не** подставляется автоматически. Для отладки: в Langflow задайте глобальную переменную **JWT** (скопируйте Bearer-токен из DevTools / ответа логина, **без** префикса `Bearer ` — компонент добавит его при `bearer_prefix`) или переключите узел OpenSearch на **basic** с `admin` / паролем OpenSearch из `.env`.
+- **Fallback без JWT**: в узле OpenSearch при `auth_mode=jwt`, если JWT пустой, компонент может перейти на **basic** с `OPENSEARCH_USERNAME` (по умолчанию `admin`) и `OPENSEARCH_PASSWORD` из окружения Langflow (см. `docker-compose`). В flow не должно быть `username: "JWT"` — это ломает fallback; в репозитории для chat-агента задано `admin`.
+- **Синк кода компонента** после правок в `flows/components/opensearch_multimodal.py`:
+
+```bash
+uv run python scripts/sync_opensearch_component_to_flows.py
+```
+
 ## Индексы: Knowledge search vs chat vs ingest
 
 - **Поиск Knowledge** (`SearchService`, alias): `get_index_name()` → обычно алиас **`documents`** (покрывает все `documents_*` с нужными маппингами).

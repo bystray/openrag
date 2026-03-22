@@ -1,7 +1,43 @@
 """Utility functions for building Langflow request headers."""
 
-from typing import Dict
+from typing import Any, Dict, Optional
+
 from utils.container_utils import transform_localhost_url
+
+
+def preview_token_safe(token: Optional[str], prefix_len: int = 8) -> str:
+    """Short non-secret preview for logs (never log full JWT/API keys)."""
+    if not token:
+        return "(empty)"
+    t = str(token).strip()
+    if len(t) <= prefix_len:
+        return "(short)"
+    return f"{t[:prefix_len]}…(len={len(t)})"
+
+
+def set_langflow_jwt_headers(headers: Dict[str, str], jwt_token: Optional[str]) -> None:
+    """Pass user JWT into Langflow global variable ``JWT`` for OpenSearch / flows.
+
+    Langflow accepts global-var headers in multiple casings depending on version
+    and client; ingestion uses ``X-Langflow-Global-Var-*`` (see langflow_file_service).
+    Chat previously sent only ``X-LANGFLOW-GLOBAL-VAR-JWT``, which can fail to merge
+    into the flow — OpenSearch node then keeps placeholder ``jwt_token`` → 401.
+    """
+    if not jwt_token:
+        return
+    # Canonical (matches Langflow docs / ingest path)
+    headers["X-Langflow-Global-Var-JWT"] = jwt_token
+    # Alternate casing used by chat client paths
+    headers["X-LANGFLOW-GLOBAL-VAR-JWT"] = jwt_token
+
+
+def log_langflow_extra_headers(logger: Any, message: str, headers: Dict[str, str]) -> None:
+    """Log Langflow global-var header keys and JWT preview only (no secrets)."""
+    jwt_preview = preview_token_safe(
+        headers.get("X-Langflow-Global-Var-JWT")
+        or headers.get("X-LANGFLOW-GLOBAL-VAR-JWT")
+    )
+    logger.info(message, header_keys=sorted(headers.keys()), jwt_header_preview=jwt_preview)
 
 
 def add_provider_credentials_to_headers(headers: Dict[str, str], config) -> None:

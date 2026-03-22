@@ -66,23 +66,40 @@ class ChatService:
 
         # Prepare extra headers for JWT authentication and embedding model
         extra_headers = {}
+        from utils.langflow_headers import (
+            add_provider_credentials_to_headers,
+            log_langflow_extra_headers,
+            preview_token_safe,
+            set_langflow_jwt_headers,
+        )
+
+        set_langflow_jwt_headers(extra_headers, jwt_token)
         if jwt_token:
-            extra_headers["X-LANGFLOW-GLOBAL-VAR-JWT"] = jwt_token
+            logger.info(
+                "[LF] Langflow chat JWT header set",
+                jwt_preview=preview_token_safe(jwt_token),
+            )
+        else:
+            logger.warning(
+                "[LF] Langflow chat: no jwt_token on user — OpenSearch node may use OPENSEARCH_PASSWORD fallback"
+            )
 
         # Pass the selected embedding model as a global variable
         from config.settings import get_openrag_config, get_index_name
-        from utils.langflow_headers import add_provider_credentials_to_headers
         from utils.openrag_query_filters import build_opensearch_filter_clauses
 
         config = get_openrag_config()
         embedding_model = config.knowledge.embedding_model
         extra_headers["X-LANGFLOW-GLOBAL-VAR-SELECTED_EMBEDDING_MODEL"] = embedding_model
+        extra_headers["X-Langflow-Global-Var-SELECTED_EMBEDDING_MODEL"] = embedding_model
         # Retrieval must use the documents alias (same as SearchService / Knowledge), not a single model index.
-        extra_headers["X-LANGFLOW-GLOBAL-VAR-OPENSEARCH_INDEX_NAME"] = get_index_name()
+        idx_name = get_index_name()
+        extra_headers["X-LANGFLOW-GLOBAL-VAR-OPENSEARCH_INDEX_NAME"] = idx_name
+        extra_headers["X-Langflow-Global-Var-OPENSEARCH_INDEX_NAME"] = idx_name
 
         # Add provider credentials to headers
         add_provider_credentials_to_headers(extra_headers, config)
-        logger.debug(f"[LF] Extra headers {extra_headers}")
+        log_langflow_extra_headers(logger, "[LF] Langflow chat headers (sanitized)", extra_headers)
         # Get context variables for filters, limit, and threshold
         from auth_context import (
             get_score_threshold,
@@ -113,10 +130,10 @@ class ChatService:
             "Sending OpenRAG query filter to Langflow",
             filter_expression=filter_expression,
         )
-        extra_headers["X-LANGFLOW-GLOBAL-VAR-OPENRAG-QUERY-FILTER"] = json.dumps(
-            filter_expression
-        )
-        logger.info(f"[LF] Extra headers {extra_headers}")
+        fq = json.dumps(filter_expression)
+        extra_headers["X-LANGFLOW-GLOBAL-VAR-OPENRAG-QUERY-FILTER"] = fq
+        extra_headers["X-Langflow-Global-Var-OPENRAG-QUERY-FILTER"] = fq
+        log_langflow_extra_headers(logger, "[LF] Langflow chat headers after filter (sanitized)", extra_headers)
         # Ensure the Langflow client exists; try lazy init if needed
         langflow_client = await clients.ensure_langflow_client()
         if not langflow_client:
@@ -174,18 +191,30 @@ class ChatService:
 
         # Prepare extra headers for JWT authentication and embedding model
         extra_headers = {}
+        from utils.langflow_headers import (
+            add_provider_credentials_to_headers,
+            log_langflow_extra_headers,
+            preview_token_safe,
+            set_langflow_jwt_headers,
+        )
+
+        set_langflow_jwt_headers(extra_headers, jwt_token)
         if jwt_token:
-            extra_headers["X-LANGFLOW-GLOBAL-VAR-JWT"] = jwt_token
+            logger.info(
+                "[LF] Langflow nudges JWT header set",
+                jwt_preview=preview_token_safe(jwt_token),
+            )
 
         # Pass the selected embedding model as a global variable
         from config.settings import get_openrag_config, get_index_name
-        from utils.langflow_headers import add_provider_credentials_to_headers
         from utils.openrag_query_filters import build_opensearch_filter_clauses
 
         config = get_openrag_config()
         embedding_model = config.knowledge.embedding_model
         extra_headers["X-LANGFLOW-GLOBAL-VAR-SELECTED_EMBEDDING_MODEL"] = embedding_model
         extra_headers["X-LANGFLOW-GLOBAL-VAR-OPENSEARCH_INDEX_NAME"] = get_index_name()
+        extra_headers["X-Langflow-Global-Var-SELECTED_EMBEDDING_MODEL"] = embedding_model
+        extra_headers["X-Langflow-Global-Var-OPENSEARCH_INDEX_NAME"] = get_index_name()
 
         # Add provider credentials to headers
         add_provider_credentials_to_headers(extra_headers, config)
@@ -228,10 +257,10 @@ class ChatService:
             "Sending OpenRAG query filter to Langflow nudges",
             filter_expression=filter_expression,
         )
-        extra_headers["X-LANGFLOW-GLOBAL-VAR-OPENRAG-QUERY-FILTER"] = json.dumps(
-            filter_expression
-        )
-        logger.info(f"[NUDGES] Extra headers {extra_headers}")
+        fq_n = json.dumps(filter_expression)
+        extra_headers["X-LANGFLOW-GLOBAL-VAR-OPENRAG-QUERY-FILTER"] = fq_n
+        extra_headers["X-Langflow-Global-Var-OPENRAG-QUERY-FILTER"] = fq_n
+        log_langflow_extra_headers(logger, "[NUDGES] Langflow headers (sanitized)", extra_headers)
 
         # Ensure the Langflow client exists; try lazy init if needed
         langflow_client = await clients.ensure_langflow_client()
@@ -287,17 +316,29 @@ class ChatService:
         if endpoint == "langflow":
             # Prepare extra headers for JWT authentication and embedding model
             extra_headers = {}
+            from utils.langflow_headers import (
+                add_provider_credentials_to_headers,
+                preview_token_safe,
+                set_langflow_jwt_headers,
+            )
+
+            set_langflow_jwt_headers(extra_headers, jwt_token)
             if jwt_token:
-                extra_headers["X-LANGFLOW-GLOBAL-VAR-JWT"] = jwt_token
+                logger.info(
+                    "[LF] upload_context JWT header set",
+                    jwt_preview=preview_token_safe(jwt_token),
+                )
 
             # Pass the selected embedding model as a global variable
             from config.settings import get_openrag_config, get_index_name
-            from utils.langflow_headers import add_provider_credentials_to_headers
 
             config = get_openrag_config()
             embedding_model = config.knowledge.embedding_model
+            idx_name = get_index_name()
             extra_headers["X-LANGFLOW-GLOBAL-VAR-SELECTED_EMBEDDING_MODEL"] = embedding_model
-            extra_headers["X-LANGFLOW-GLOBAL-VAR-OPENSEARCH_INDEX_NAME"] = get_index_name()
+            extra_headers["X-Langflow-Global-Var-SELECTED_EMBEDDING_MODEL"] = embedding_model
+            extra_headers["X-LANGFLOW-GLOBAL-VAR-OPENSEARCH_INDEX_NAME"] = idx_name
+            extra_headers["X-Langflow-Global-Var-OPENSEARCH_INDEX_NAME"] = idx_name
 
             # Add provider credentials to headers
             add_provider_credentials_to_headers(extra_headers, config)

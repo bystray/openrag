@@ -141,7 +141,8 @@ services:
       - OLLAMA_BASE_URL=${OLLAMA_ENDPOINT}
       - LANGFLOW_LOAD_FLOWS_PATH=/app/flows
       - LANGFLOW_SECRET_KEY=${LANGFLOW_SECRET_KEY}
-      - JWT=None
+      # JWT не задаём: иначе строка "None" попадает в глобальную переменную JWT и даёт 401 в OpenSearch.
+      # Токен приходит из backend (X-Langflow-Global-Var-JWT) или вручную в Playground.
       - OWNER=None
       - OWNER_NAME=None
       - OWNER_EMAIL=None
