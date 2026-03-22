@@ -14,11 +14,11 @@ EMBED_RETRY_INITIAL_DELAY = 1.0
 EMBED_RETRY_MAX_DELAY = 8.0
 
 AGGREGATION_FIELDS = {
-    "data_sources": "filename.keyword",
-    "document_types": "mimetype.keyword",
-    "owners": "owner.keyword",
-    "connector_types": "connector_type.keyword",
-    "embedding_models": "embedding_model.keyword",
+    "data_sources": "filename",
+    "document_types": "mimetype",
+    "owners": "owner",
+    "connector_types": "connector_type",
+    "embedding_models": "embedding_model",
 }
 
 

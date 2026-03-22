@@ -42,7 +42,7 @@ Backend читает flow по **ID из `.env`**, а не по имени фа�
 
 ## Фильтры (filename / mimetype / owner / connector_type)
 
-Один источник правды: `src/utils/openrag_query_filters.py` — поля с суффиксом **`.keyword`** для exact match, согласованно с `SearchService`.
+Один источник правды: `src/utils/openrag_query_filters.py` — имена полей как в маппинге индекса (`filename`, `mimetype`, … как **keyword**, без подполя `.keyword`, иначе на стандартном индексе OpenRAG будет ошибка «field not found»).
 
 ## Проверка синхронизации (без Docker)
 
