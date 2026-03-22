@@ -2,6 +2,7 @@ import { GitBranch } from "lucide-react";
 import { motion } from "motion/react";
 import DogIcon from "@/components/icons/dog-icon";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
+import { sanitizeAssistantContent } from "@/lib/sanitize-assistant-content";
 import { cn } from "@/lib/utils";
 import type {
   FunctionCall,
@@ -14,6 +15,8 @@ import { TokenUsage } from "./token-usage";
 interface AssistantMessageProps {
   content: string;
   functionCalls?: FunctionCall[];
+  /** Показывать блоки вызовов инструментов (например в режиме отладки). */
+  showFunctionCalls?: boolean;
   messageIndex?: number;
   expandedFunctionCalls: Set<string>;
   onToggle: (functionCallId: string) => void;
@@ -31,6 +34,7 @@ interface AssistantMessageProps {
 export function AssistantMessage({
   content,
   functionCalls = [],
+  showFunctionCalls = false,
   messageIndex,
   expandedFunctionCalls,
   onToggle,
@@ -44,6 +48,7 @@ export function AssistantMessage({
   isInitialGreeting = false,
   usage,
 }: AssistantMessageProps) {
+  const safeContent = sanitizeAssistantContent(content);
   return (
     <motion.div
       initial={animate ? { opacity: 0, y: -20 } : { opacity: 1, y: 0 }}
@@ -99,12 +104,14 @@ export function AssistantMessage({
           ) : undefined
         }
       >
-        <FunctionCalls
-          functionCalls={functionCalls}
-          messageIndex={messageIndex}
-          expandedFunctionCalls={expandedFunctionCalls}
-          onToggle={onToggle}
-        />
+        {showFunctionCalls && (
+          <FunctionCalls
+            functionCalls={functionCalls}
+            messageIndex={messageIndex}
+            expandedFunctionCalls={expandedFunctionCalls}
+            onToggle={onToggle}
+          />
+        )}
         <div className="relative">
           {/* Slide animation for initial greeting */}
           <motion.div
@@ -134,11 +141,11 @@ export function AssistantMessage({
               )}
               chatMessage={
                 isStreaming
-                  ? content.trim()
-                    ? content +
+                  ? safeContent.trim()
+                    ? safeContent +
                       ' <span class="inline-block w-1 h-4 bg-primary ml-1 animate-pulse"></span>'
                     : '<span class="text-muted-foreground italic">Thinking<span class="thinking-dots"></span></span>'
-                  : content
+                  : safeContent
               }
             />
             {usage && !isStreaming && <TokenUsage usage={usage} />}

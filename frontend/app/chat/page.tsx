@@ -1110,6 +1110,7 @@ function ChatPage() {
                           <AssistantMessage
                             content={message.content}
                             functionCalls={message.functionCalls}
+                            showFunctionCalls={isDebugMode}
                             messageIndex={index}
                             expandedFunctionCalls={expandedFunctionCalls}
                             onToggle={toggleFunctionCall}
@@ -1134,6 +1135,7 @@ function ChatPage() {
                 <AssistantMessage
                   content={streamingMessage.content}
                   functionCalls={streamingMessage.functionCalls}
+                  showFunctionCalls={isDebugMode}
                   messageIndex={messages.length}
                   expandedFunctionCalls={expandedFunctionCalls}
                   onToggle={toggleFunctionCall}

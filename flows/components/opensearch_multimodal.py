@@ -1977,7 +1977,10 @@ class OpenSearchVectorStoreComponentMultimodalMultiEmbedding(LCVectorStoreCompon
         search only if a query is provided.
 
         Returns:
-            List of Data objects containing search results with text and metadata
+            List of Data objects containing search results with text and metadata.
+            Metadata includes whatever fields exist on each chunk in the index (commonly
+            ``filename`` and ``page`` when the ingest pipeline writes them), so the agent
+            can cite sources.
 
         Raises:
             Exception: If search operation fails
