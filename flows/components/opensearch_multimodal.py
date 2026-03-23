@@ -1412,6 +1412,267 @@ class OpenSearchVectorStoreComponentMultimodalMultiEmbedding(LCVectorStoreCompon
 
         return None
 
+    def _get_physical_indices(self, client: OpenSearch) -> tuple[list[str], bool]:
+        """Resolve current target into physical indices and alias flag."""
+        try:
+            alias_map = client.indices.get_alias(name=self.index_name)
+            if isinstance(alias_map, dict) and len(alias_map) > 0:
+                return list(alias_map.keys()), True
+        except OpenSearchException:
+            pass
+        return [self.index_name], False
+
+    def _get_index_properties_for(self, client: OpenSearch, index_name: str) -> dict[str, Any] | None:
+        """Retrieve flattened mapping properties for one physical index."""
+        try:
+            mapping = client.indices.get_mapping(index=index_name)
+        except OpenSearchException as e:
+            logger.warning(f"Failed to fetch mapping for index '{index_name}': {e}")
+            return None
+
+        index_data = mapping.get(index_name, {})
+        props = index_data.get("mappings", {}).get("properties", {})
+        return props if isinstance(props, dict) else None
+
+    def _extract_knn_fields(self, properties: dict[str, Any] | None) -> dict[str, int | None]:
+        """Extract knn_vector fields with optional dimensions."""
+        if not isinstance(properties, dict):
+            return {}
+        knn_fields: dict[str, int | None] = {}
+        for field_name, field_def in properties.items():
+            if not isinstance(field_def, dict):
+                continue
+            if field_def.get("type") == "knn_vector":
+                knn_fields[field_name] = field_def.get("dimension")
+        return knn_fields
+
+    def _detect_available_models_for_index(
+        self,
+        client: OpenSearch,
+        index_name: str,
+        filter_clauses: list[dict] | None = None,
+    ) -> list[str]:
+        """Detect embedding models for a single physical index."""
+        try:
+            agg_query = {"size": 0, "aggs": {"embedding_models": {"terms": {"field": "embedding_model", "size": 20}}}}
+            if filter_clauses:
+                agg_query["query"] = {"bool": {"filter": filter_clauses}}
+            result = client.search(index=index_name, body=agg_query, params={"terminate_after": 0})
+            buckets = result.get("aggregations", {}).get("embedding_models", {}).get("buckets", [])
+            return [b["key"] for b in buckets if b.get("key")]
+        except (OpenSearchException, KeyError, ValueError) as e:
+            logger.warning(f"Failed to detect embedding models for index '{index_name}': {e}")
+            return []
+
+    def _detect_search_topology(
+        self,
+        client: OpenSearch,
+        physical_indices: list[str],
+    ) -> str:
+        """Classify topology as single_index, homogeneous_alias, or heterogeneous_alias."""
+        if len(physical_indices) <= 1:
+            return "single_index"
+
+        signatures: set[tuple[tuple[str, int | None], ...]] = set()
+        for index_name in physical_indices:
+            properties = self._get_index_properties_for(client, index_name)
+            knn_fields = self._extract_knn_fields(properties)
+            signature = tuple(sorted(knn_fields.items()))
+            signatures.add(signature)
+
+        return "homogeneous_alias" if len(signatures) <= 1 else "heterogeneous_alias"
+
+    def _build_heterogeneous_search_body(
+        self,
+        query_text: str,
+        filter_clauses: list[dict],
+        limit: int,
+        score_threshold: int | float,
+        knn_queries: list[dict],
+        include_aggs: bool,
+    ) -> dict[str, Any]:
+        """Build per-index search body for hybrid or text-only mode."""
+        should_clauses: list[dict[str, Any]] = [
+            {
+                "multi_match": {
+                    "query": query_text,
+                    "fields": ["text^2", "filename^1.5"],
+                    "type": "best_fields",
+                    "fuzziness": "AUTO",
+                    "boost": 0.3 if knn_queries else 1.0,
+                }
+            }
+        ]
+        if knn_queries:
+            should_clauses.insert(
+                0,
+                {
+                    "dis_max": {
+                        "tie_breaker": 0.0,
+                        "boost": 0.7,
+                        "queries": knn_queries,
+                    }
+                },
+            )
+
+        body: dict[str, Any] = {
+            "query": {
+                "bool": {
+                    "should": should_clauses,
+                    "minimum_should_match": 1,
+                    "filter": filter_clauses,
+                }
+            },
+            "_source": [
+                "filename",
+                "mimetype",
+                "page",
+                "text",
+                "source_url",
+                "owner",
+                "embedding_model",
+                "allowed_users",
+                "allowed_groups",
+                "document_id",
+            ],
+            "size": limit,
+        }
+        if include_aggs:
+            body["aggs"] = {
+                "data_sources": {"terms": {"field": "filename", "size": 20}},
+                "document_types": {"terms": {"field": "mimetype", "size": 10}},
+                "owners": {"terms": {"field": "owner", "size": 10}},
+                "embedding_models": {"terms": {"field": "embedding_model", "size": 10}},
+            }
+        if isinstance(score_threshold, (int, float)) and score_threshold > 0:
+            body["min_score"] = score_threshold
+        return body
+
+    def _dedup_key_for_hit(self, hit: dict[str, Any]) -> str:
+        """Create a stable dedup key across indices for document chunks."""
+        source = hit.get("_source", {}) if isinstance(hit, dict) else {}
+        doc_id = source.get("document_id")
+        page = source.get("page")
+        text = source.get("text", "")
+        filename = source.get("filename", "")
+        source_url = source.get("source_url", "")
+        if doc_id:
+            return f"doc:{doc_id}|page:{page}"
+        return f"fn:{filename}|url:{source_url}|page:{page}|txt:{text[:120]}"
+
+    def _run_heterogeneous_alias_search(
+        self,
+        client: OpenSearch,
+        query_text: str,
+        filter_clauses: list[dict],
+        limit: int,
+        score_threshold: int | float,
+        query_embeddings: dict[str, list[float]],
+        use_num_candidates: bool,
+        num_candidates: int,
+        physical_indices: list[str],
+    ) -> list[dict[str, Any]]:
+        """Execute per-index search for heterogeneous aliases and merge results."""
+        per_index_hits: list[dict[str, Any]] = []
+        failed_indices = 0
+        per_index_limit = max(limit, limit * 2)
+
+        for idx_num, index_name in enumerate(physical_indices):
+            properties = self._get_index_properties_for(client, index_name)
+            knn_fields = self._extract_knn_fields(properties)
+            available_models = self._detect_available_models_for_index(client, index_name, filter_clauses)
+
+            local_knn_with_candidates: list[dict[str, Any]] = []
+            local_knn_without_candidates: list[dict[str, Any]] = []
+            for model_name, embedding_vector in query_embeddings.items():
+                field_name = get_embedding_field_name(model_name)
+                if available_models and model_name not in available_models:
+                    continue
+                if field_name not in knn_fields:
+                    continue
+                field_dim = knn_fields.get(field_name)
+                if field_dim is not None and field_dim != len(embedding_vector):
+                    continue
+                base_query = {"knn": {field_name: {"vector": embedding_vector, "k": 50}}}
+                local_knn_without_candidates.append(base_query)
+                if use_num_candidates:
+                    with_candidates = copy.deepcopy(base_query)
+                    local_knn_with_candidates.append(with_candidates)
+                else:
+                    local_knn_with_candidates.append(base_query)
+
+            mode = "knn_hybrid" if local_knn_with_candidates else "text_only"
+            self.log(f"[HETERO] index={index_name}; mode={mode}; models={available_models}")
+
+            body = self._build_heterogeneous_search_body(
+                query_text=query_text,
+                filter_clauses=filter_clauses,
+                limit=per_index_limit,
+                score_threshold=score_threshold,
+                knn_queries=local_knn_with_candidates,
+                include_aggs=(idx_num == 0),
+            )
+            fallback_body = None
+            if local_knn_without_candidates and use_num_candidates:
+                fallback_body = copy.deepcopy(body)
+                try:
+                    fallback_body["query"]["bool"]["should"][0]["dis_max"]["queries"] = local_knn_without_candidates
+                except (KeyError, IndexError, TypeError):
+                    fallback_body = None
+
+            try:
+                resp = client.search(index=index_name, body=body, params={"terminate_after": 0})
+            except RequestError as e:
+                lowered = str(e).lower()
+                if fallback_body is not None and "num_candidates" in lowered:
+                    try:
+                        resp = client.search(index=index_name, body=fallback_body, params={"terminate_after": 0})
+                    except Exception as sub_err:
+                        logger.warning(
+                            f"Heterogeneous sub-search failed after retry for index '{index_name}': {sub_err}"
+                        )
+                        self.log(f"[HETERO] index={index_name}; failed={sub_err}")
+                        failed_indices += 1
+                        continue
+                else:
+                    logger.warning(f"Heterogeneous sub-search failed for index '{index_name}': {e}")
+                    self.log(f"[HETERO] index={index_name}; failed={e}")
+                    failed_indices += 1
+                    continue
+            except Exception as e:
+                logger.warning(f"Heterogeneous sub-search failed for index '{index_name}': {e}")
+                self.log(f"[HETERO] index={index_name}; failed={e}")
+                failed_indices += 1
+                continue
+
+            hits = resp.get("hits", {}).get("hits", [])
+            self.log(f"[HETERO] index={index_name}; hits={len(hits)}")
+            per_index_hits.extend(hits)
+
+        self.log(f"[HETERO] total hits before dedup={len(per_index_hits)}")
+        if failed_indices == len(physical_indices) and physical_indices:
+            self.log("[HETERO] all sub-search requests failed")
+        deduped: dict[str, dict[str, Any]] = {}
+        for hit in per_index_hits:
+            key = self._dedup_key_for_hit(hit)
+            existing = deduped.get(key)
+            if existing is None or (hit.get("_score") or 0) > (existing.get("_score") or 0):
+                deduped[key] = hit
+
+        merged_hits = list(deduped.values())
+        merged_hits.sort(key=lambda h: h.get("_score") or 0, reverse=True)
+        merged_hits = merged_hits[:limit]
+        self.log(f"[HETERO] total hits after dedup={len(merged_hits)}")
+
+        return [
+            {
+                "page_content": hit.get("_source", {}).get("text", ""),
+                "metadata": {k: v for k, v in hit.get("_source", {}).items() if k != "text"},
+                "score": hit.get("_score"),
+            }
+            for hit in merged_hits
+        ]
+
     # ---------- search (multi-model hybrid) ----------
     def search(self, query: str | None = None) -> list[dict[str, Any]]:
         """Perform multi-model hybrid search combining multiple vector similarities and keyword matching.
@@ -1646,6 +1907,11 @@ class OpenSearchVectorStoreComponentMultimodalMultiEmbedding(LCVectorStoreCompon
             num_candidates = 0
         use_num_candidates = num_candidates > 0
 
+        # Detect search topology for runtime routing
+        physical_indices, is_alias = self._get_physical_indices(client)
+        topology = self._detect_search_topology(client, physical_indices) if is_alias else "single_index"
+        self.log(f"[TOPOLOGY] detected={topology}; alias={is_alias}; indices={physical_indices}")
+
         for model_name, embedding_vector in query_embeddings.items():
             field_name = get_embedding_field_name(model_name)
             selected_field = field_name
@@ -1689,7 +1955,6 @@ class OpenSearchVectorStoreComponentMultimodalMultiEmbedding(LCVectorStoreCompon
 
             if use_num_candidates:
                 query_with_candidates = copy.deepcopy(base_query)
-                query_with_candidates["knn"][selected_field]["num_candidates"] = num_candidates
             else:
                 query_with_candidates = base_query
 
@@ -1699,6 +1964,20 @@ class OpenSearchVectorStoreComponentMultimodalMultiEmbedding(LCVectorStoreCompon
         # Get limit and score threshold
         limit = (filter_obj or {}).get("limit", self.number_of_results)
         score_threshold = (filter_obj or {}).get("score_threshold", 0)
+
+        if topology == "heterogeneous_alias":
+            self.log("[TOPOLOGY] Using heterogeneous alias execution path")
+            return self._run_heterogeneous_alias_search(
+                client=client,
+                query_text=q,
+                filter_clauses=filter_clauses,
+                limit=limit,
+                score_threshold=score_threshold,
+                query_embeddings=query_embeddings,
+                use_num_candidates=use_num_candidates,
+                num_candidates=num_candidates,
+                physical_indices=physical_indices,
+            )
 
         # Build keyword-only body once so we can gracefully fallback from KNN errors.
         keyword_only_body = {
@@ -1803,8 +2082,6 @@ class OpenSearchVectorStoreComponentMultimodalMultiEmbedding(LCVectorStoreCompon
                     }
                 }
             }
-            if use_num_candidates:
-                knn_fallback["knn"][fallback_field]["num_candidates"] = num_candidates
             try:
                 bool_query["should"][0]["dis_max"]["queries"] = [knn_fallback]
             except (KeyError, IndexError, TypeError):
@@ -1843,13 +2120,28 @@ class OpenSearchVectorStoreComponentMultimodalMultiEmbedding(LCVectorStoreCompon
                 for hit in hits
             ]
 
-        # Build exists filter - document must have at least one embedding field
-        exists_any_embedding = {
-            "bool": {"should": [{"exists": {"field": f}} for f in set(embedding_fields)], "minimum_should_match": 1}
-        }
+        # Detect heterogeneous alias topology (alias -> multiple physical indices).
+        # In this case, global exists(field=embedding_*) filter can suppress valid
+        # text matches from indices that use different embedding fields.
+        is_heterogeneous_alias = False
+        try:
+            alias_map = client.indices.get_alias(name=self.index_name)
+            is_heterogeneous_alias = isinstance(alias_map, dict) and len(alias_map) > 1
+        except OpenSearchException:
+            # Not an alias (or alias lookup unavailable) -> keep previous behavior.
+            is_heterogeneous_alias = False
 
-        # Combine user filters with exists filter
-        all_filters = [*filter_clauses, exists_any_embedding]
+        # Combine user filters with embedding existence constraint only for
+        # non-heterogeneous targets. For heterogeneous aliases we keep only
+        # user filters to avoid false empty results.
+        if is_heterogeneous_alias:
+            all_filters = [*filter_clauses]
+            self.log("[SEARCH] Heterogeneous alias detected - skipping global embedding exists filter")
+        else:
+            exists_any_embedding = {
+                "bool": {"should": [{"exists": {"field": f}} for f in set(embedding_fields)], "minimum_should_match": 1}
+            }
+            all_filters = [*filter_clauses, exists_any_embedding]
 
         # Build multi-model hybrid query
         body = {

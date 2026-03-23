@@ -276,10 +276,11 @@ class ChatService:
                 user_id, previous_response_id
             )
             if conversation_history:
+                messages = conversation_history.get("messages") or []
                 conversation_history = "\n".join(
                     [
                         f"{msg['role']}: {msg['content']}"
-                        for msg in conversation_history["messages"]
+                        for msg in messages
                         if msg["role"] in ["user", "assistant"]
                     ]
                 )
