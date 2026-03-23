@@ -1646,21 +1646,29 @@ class OpenSearchVectorStoreComponentMultimodalMultiEmbedding(LCVectorStoreCompon
                 continue
 
             hits = resp.get("hits", {}).get("hits", [])
-            self.log(f"[HETERO] index={index_name}; hits={len(hits)}")
+            max_score_index = max((hit.get("_score") or 0.0) for hit in hits) if hits else 0.0
+            self.log(f"[HETERO] index={index_name}; max_score={max_score_index}; hits={len(hits)}")
+            for hit in hits:
+                raw_score = hit.get("_score") or 0.0
+                hit["_normalized_score"] = (raw_score / max_score_index) if max_score_index > 0 else 0.0
             per_index_hits.extend(hits)
 
         self.log(f"[HETERO] total hits before dedup={len(per_index_hits)}")
         if failed_indices == len(physical_indices) and physical_indices:
             self.log("[HETERO] all sub-search requests failed")
+        normalized_hits = sum(1 for hit in per_index_hits if "_normalized_score" in hit)
+        self.log(f"[HETERO] normalized_hits={normalized_hits}")
         deduped: dict[str, dict[str, Any]] = {}
         for hit in per_index_hits:
             key = self._dedup_key_for_hit(hit)
             existing = deduped.get(key)
-            if existing is None or (hit.get("_score") or 0) > (existing.get("_score") or 0):
+            hit_rank = hit.get("_normalized_score", hit.get("_score") or 0.0)
+            existing_rank = existing.get("_normalized_score", existing.get("_score") or 0.0) if existing else None
+            if existing is None or hit_rank > existing_rank:
                 deduped[key] = hit
 
         merged_hits = list(deduped.values())
-        merged_hits.sort(key=lambda h: h.get("_score") or 0, reverse=True)
+        merged_hits.sort(key=lambda h: h.get("_normalized_score", h.get("_score") or 0.0), reverse=True)
         merged_hits = merged_hits[:limit]
         self.log(f"[HETERO] total hits after dedup={len(merged_hits)}")
 
