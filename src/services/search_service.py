@@ -15,7 +15,11 @@ from auth_context import get_auth_context
 from utils.logging_config import get_logger
 from utils.openrag_query_filters import EXACT_FILTER_FIELD_MAPPING, build_opensearch_filter_clauses
 from services import opensearch_search_engine as ose
-from services.search_quality_guard import _apply_search_quality_guard, max_chunk_score
+from services.search_quality_guard import (
+    _apply_search_quality_guard,
+    max_chunk_score,
+    query_requires_strict_lexical_evidence,
+)
 
 logger = get_logger(__name__)
 
@@ -45,41 +49,160 @@ def build_local_aggs_from_chunks(chunks: list[dict[str, Any]]) -> dict[str, Any]
     }
 
 
+def _filters_for_lexical_probe(
+    hybrid_filter_for_probe: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Drop term/terms on `filename` so the probe never touches that field (avoids
+    fielddata / mapping issues on heterogeneous aliases where `filename` may be text).
+    """
+    out: list[dict[str, Any]] = []
+    for clause in hybrid_filter_for_probe:
+        if isinstance(clause, dict):
+            term = clause.get("term")
+            if isinstance(term, dict) and "filename" in term:
+                continue
+            terms = clause.get("terms")
+            if isinstance(terms, dict) and "filename" in terms:
+                continue
+        out.append(clause)
+    return out
+
+
+async def _filter_query_embeddings_for_safe_knn(
+    opensearch_client: Any,
+    index_name: str,
+    query_embeddings: dict[str, list[float]],
+    get_embedding_field_name,
+) -> dict[str, list[float]]:
+    """
+    Keep only models whose embedding field exists as knn_vector on every physical
+    index behind the alias, with matching dimension. Avoids OpenSearch errors like
+    "Field X is not knn_vector type" when the alias is heterogeneous.
+
+    Empty dict => caller should use lexical-only hybrid (no KNN clauses).
+    """
+    if not query_embeddings:
+        return {}
+
+    try:
+        physical_indices, _ = await ose.async_get_physical_indices(
+            opensearch_client, index_name
+        )
+    except Exception as e:
+        logger.warning(
+            "Could not resolve physical indices for safe KNN; lexical-only fallback",
+            error=str(e),
+        )
+        return {}
+
+    if not physical_indices:
+        return {}
+
+    allowed: dict[str, list[float]] = {}
+    for model_name, embedding_vector in query_embeddings.items():
+        field_name = get_embedding_field_name(model_name)
+        dim = len(embedding_vector)
+        ok_all = True
+        for phys in physical_indices:
+            props = await ose.async_get_index_properties_for(opensearch_client, phys)
+            knn_fields = ose.extract_knn_fields(props)
+            if field_name not in knn_fields:
+                ok_all = False
+                logger.debug(
+                    "KNN field not on index; skipping model for legacy hybrid KNN",
+                    index=phys,
+                    field=field_name,
+                    model=model_name,
+                )
+                break
+            field_dim = knn_fields.get(field_name)
+            if field_dim is not None and field_dim != dim:
+                ok_all = False
+                logger.debug(
+                    "KNN dimension mismatch; skipping model for legacy hybrid KNN",
+                    index=phys,
+                    field=field_name,
+                    model=model_name,
+                    expected_dim=field_dim,
+                    query_dim=dim,
+                )
+                break
+        if ok_all:
+            allowed[model_name] = embedding_vector
+
+    if not allowed:
+        logger.info(
+            "No embedding field is knn_vector on all backing indices; using lexical-only hybrid",
+            index_name=index_name,
+            physical_indices=physical_indices,
+        )
+    elif len(allowed) < len(query_embeddings):
+        logger.info(
+            "Filtered KNN models to those safe on all backing indices",
+            kept_models=list(allowed.keys()),
+            dropped_models=[m for m in query_embeddings if m not in allowed],
+        )
+
+    return allowed
+
+
 async def _run_lexical_probe(
     opensearch_client: Any,
     index_name: str,
     query: str,
     hybrid_filter_for_probe: list[dict[str, Any]],
-    search_params: dict[str, Any],
 ) -> float:
-    """Strict lexical multi_match (no KNN); max score of top hit as evidence signal."""
+    """Strict phrase match on `text` only (slop=0); max score as lexical evidence. No KNN.
+
+    Body is intentionally minimal (no aggs, no sort) to avoid fielddata on text fields.
+    """
+    probe_filters = _filters_for_lexical_probe(hybrid_filter_for_probe)
     bool_query: dict[str, Any] = {
         "must": [
             {
-                "multi_match": {
-                    "query": query,
-                    "fields": ["text^2", "filename^1.5"],
-                    "type": "best_fields",
-                    "fuzziness": 0,
+                "match_phrase": {
+                    "text": {
+                        "query": query,
+                        "slop": 0,
+                    }
                 }
             }
         ],
     }
-    if hybrid_filter_for_probe:
-        bool_query["filter"] = hybrid_filter_for_probe
+    if probe_filters:
+        bool_query["filter"] = probe_filters
 
     body: dict[str, Any] = {
         "query": {"bool": bool_query},
         "size": 1,
         "_source": False,
     }
-    resp = await opensearch_client.search(
-        index=index_name, body=body, params=search_params
-    )
+    try:
+        resp = await opensearch_client.search(
+            index=index_name, body=body, params={}
+        )
+    except Exception as e:
+        logger.warning(
+            "search_quality_guard lexical_probe exception",
+            query_preview=query[:80] if query else None,
+            index_name=index_name,
+            error=str(e),
+            exc_info=True,
+        )
+        raise
+
     hits = resp.get("hits", {}).get("hits", [])
+    top_score = float(hits[0].get("_score") or 0.0) if hits else 0.0
+    logger.info(
+        "search_quality_guard lexical_probe",
+        query_preview=query[:80] if query else None,
+        index_name=index_name,
+        hit_count=len(hits),
+        top_score=top_score,
+    )
     if not hits:
         return 0.0
-    return float(hits[0].get("_score") or 0.0)
+    return top_score
 
 
 async def _apply_guard_to_chunks(
@@ -99,6 +222,13 @@ async def _apply_guard_to_chunks(
         or is_wildcard_match_all
         or hybrid_filter_for_probe is None
     ):
+        logger.info(
+            "search_quality_guard skipped",
+            query_preview=query[:80] if query else None,
+            SEARCH_QUALITY_GUARD_ENABLED=SEARCH_QUALITY_GUARD_ENABLED,
+            is_wildcard_match_all=is_wildcard_match_all,
+            hybrid_filter_for_probe_is_none=hybrid_filter_for_probe is None,
+        )
         return chunks, False
 
     lex_max: float | None = None
@@ -108,12 +238,12 @@ async def _apply_guard_to_chunks(
             index_name,
             query,
             hybrid_filter_for_probe,
-            {"terminate_after": 0},
         )
     except Exception as e:
         logger.warning(
             "Lexical quality probe failed; fail-open (keeping results)",
             error=str(e),
+            exc_info=True,
         )
         lex_max = None
 
@@ -127,6 +257,18 @@ async def _apply_guard_to_chunks(
         SEARCH_QUALITY_GUARD_HYBRID_THRESHOLD,
         SEARCH_QUALITY_GUARD_ENABLED,
         is_wildcard_match_all,
+    )
+    logger.info(
+        "search_quality_guard apply",
+        query_preview=query[:80] if query else None,
+        SEARCH_QUALITY_GUARD_ENABLED=SEARCH_QUALITY_GUARD_ENABLED,
+        is_wildcard_match_all=is_wildcard_match_all,
+        hybrid_filter_for_probe_is_none=False,
+        lex_max_score=lex_max,
+        query_requires_strict_lexical_evidence=query_requires_strict_lexical_evidence(query),
+        top_score=top,
+        keep=keep,
+        blocked=not keep,
     )
     if not keep:
         return [], True
@@ -335,6 +477,13 @@ class SearchService:
                 models=list(query_embeddings.keys()),
                 query_preview=query[:50]
             )
+
+            query_embeddings = await _filter_query_embeddings_for_safe_knn(
+                opensearch_client,
+                get_index_name(),
+                query_embeddings,
+                get_embedding_field_name,
+            )
         else:
             # Wildcard query - no embedding needed
             filter_clauses = build_opensearch_filter_clauses(filters)
@@ -350,7 +499,7 @@ class SearchService:
             else:
                 query_block = {"match_all": {}}
         else:
-            # Build multi-model KNN queries
+            # Build multi-model KNN queries (fields verified as knn_vector on every backing index)
             knn_queries = []
             embedding_fields_to_check = []
 
@@ -366,16 +515,17 @@ class SearchService:
                     }
                 })
 
-            # Build exists filter - doc must have at least one embedding field
-            exists_any_embedding = {
-                "bool": {
-                    "should": [{"exists": {"field": f}} for f in embedding_fields_to_check],
-                    "minimum_should_match": 1
+            if knn_queries:
+                exists_any_embedding = {
+                    "bool": {
+                        "should": [{"exists": {"field": f}} for f in embedding_fields_to_check],
+                        "minimum_should_match": 1
+                    }
                 }
-            }
+                all_filters = [*filter_clauses, exists_any_embedding]
+            else:
+                all_filters = list(filter_clauses)
 
-            # Add exists filter to existing filters
-            all_filters = [*filter_clauses, exists_any_embedding]
             hybrid_filter_for_probe = all_filters
 
             logger.debug(
@@ -385,61 +535,55 @@ class SearchService:
                 filter_types=[type(f).__name__ for f in all_filters]
             )
 
-            # Hybrid search query structure (semantic + keyword)
-            # Use dis_max to pick best score across multiple embedding fields
-            query_block = {
-                "bool": {
-                    "should": [
-                        {
-                            "dis_max": {
-                                "tie_breaker": 0.0,  # Take only the best match, no blending
-                                "boost": 0.7,         # 70% weight for semantic search
-                                "queries": knn_queries
-                            }
-                        },
-                        {
-                            "multi_match": {
-                                "query": query,
-                                "fields": ["text^2", "filename^1.5"],
-                                "type": "best_fields",
-                                "fuzziness": "AUTO",
-                                "boost": 0.3,  # 30% weight for keyword search
-                            }
-                        },
-                    ],
-                    "minimum_should_match": 1,
-                    "filter": all_filters,
+            if knn_queries:
+                query_block = {
+                    "bool": {
+                        "should": [
+                            {
+                                "dis_max": {
+                                    "tie_breaker": 0.0,
+                                    "boost": 0.7,
+                                    "queries": knn_queries
+                                }
+                            },
+                            {
+                                "multi_match": {
+                                    "query": query,
+                                    "fields": ["text^2", "filename^1.5"],
+                                    "type": "best_fields",
+                                    "fuzziness": "AUTO",
+                                    "boost": 0.3,
+                                }
+                            },
+                        ],
+                        "minimum_should_match": 1,
+                        "filter": all_filters,
+                    }
                 }
-            }
+            else:
+                query_block = {
+                    "bool": {
+                        "should": [
+                            {
+                                "multi_match": {
+                                    "query": query,
+                                    "fields": ["text^2", "filename^1.5"],
+                                    "type": "best_fields",
+                                    "fuzziness": "AUTO",
+                                    "boost": 1.0,
+                                }
+                            }
+                        ],
+                        "minimum_should_match": 1,
+                        "filter": all_filters,
+                    }
+                }
 
+        # No OpenSearch terms aggregations here: `terms` on `filename` (and similar)
+        # triggers fielddata errors when those fields are mapped as `text` on some indices.
+        # `/api/search` facets match the heterogeneous path: built locally from returned chunks.
         search_body = {
             "query": query_block,
-            "aggs": {
-                "data_sources": {
-                    "terms": {"field": AGGREGATION_FIELDS["data_sources"], "size": 20}
-                },
-                "document_types": {
-                    "terms": {
-                        "field": AGGREGATION_FIELDS["document_types"],
-                        "size": 10,
-                    }
-                },
-                "owners": {
-                    "terms": {"field": AGGREGATION_FIELDS["owners"], "size": 10}
-                },
-                "connector_types": {
-                    "terms": {
-                        "field": AGGREGATION_FIELDS["connector_types"],
-                        "size": 10,
-                    }
-                },
-                "embedding_models": {
-                    "terms": {
-                        "field": AGGREGATION_FIELDS["embedding_models"],
-                        "size": 10,
-                    }
-                },
-            },
             "_source": [
                 "filename",
                 "mimetype",
@@ -465,7 +609,6 @@ class SearchService:
 
         # Prepare fallback search body without num_candidates for clusters that don't support it
         fallback_search_body = None
-        fallback_without_aggs = None
         if not is_wildcard_match_all:
             try:
                 fallback_search_body = copy.deepcopy(search_body)
@@ -480,11 +623,6 @@ class SearchService:
                                 params.pop("num_candidates", None)
             except (KeyError, IndexError, AttributeError, TypeError):
                 fallback_search_body = None
-        try:
-            fallback_without_aggs = copy.deepcopy(search_body)
-            fallback_without_aggs.pop("aggs", None)
-        except (AttributeError, TypeError):
-            fallback_without_aggs = None
 
         # Authentication required - DLS will handle document filtering automatically
         logger.debug(
@@ -611,55 +749,25 @@ class SearchService:
                     )
                     raise
             else:
-                can_retry_without_aggs = (
-                    fallback_without_aggs is not None
-                    and "fielddata is disabled" in error_message.lower()
-                )
-                if can_retry_without_aggs:
-                    logger.warning(
-                        "OpenSearch aggregations failed due to fielddata/mapping mismatch; retrying without aggregations"
-                    )
-                    results = await opensearch_client.search(
-                        index=get_index_name(),
-                        body=fallback_without_aggs,
-                        params=search_params,
-                    )
-                else:
-                    logger.error(
-                        "OpenSearch query failed",
-                        error=error_message,
-                        search_body=search_body,
-                    )
-                    raise
-        except Exception as e:
-            error_message = str(e)
-            can_retry_without_aggs = (
-                fallback_without_aggs is not None
-                and "fielddata is disabled" in error_message.lower()
-            )
-            if can_retry_without_aggs:
-                logger.warning(
-                    "OpenSearch query failed with non-RequestError fielddata issue; retrying without aggregations"
-                )
-                results = await opensearch_client.search(
-                    index=get_index_name(),
-                    body=fallback_without_aggs,
-                    params=search_params,
-                )
-                # Continue with transformed results below
-            else:
-                root_cause = None
-                if hasattr(e, "info") and isinstance(getattr(e, "info"), dict):
-                    err = getattr(e, "info", {}).get("error", {})
-                    root_cause = err.get("root_cause") or err.get("reason", str(e))
                 logger.error(
                     "OpenSearch query failed",
                     error=error_message,
-                    root_cause=root_cause,
                     search_body=search_body,
                 )
-                # Re-raise the exception so the API returns the error to frontend
                 raise
+        except Exception as e:
+            error_message = str(e)
+            root_cause = None
+            if hasattr(e, "info") and isinstance(getattr(e, "info"), dict):
+                err = getattr(e, "info", {}).get("error", {})
+                root_cause = err.get("root_cause") or err.get("reason", str(e))
+            logger.error(
+                "OpenSearch query failed",
+                error=error_message,
+                root_cause=root_cause,
+                search_body=search_body,
+            )
+            raise
 
         # Transform results (keep for backward compatibility)
         chunks = []
@@ -701,10 +809,10 @@ class SearchService:
                 "total": 0,
             }
 
-        # Return both transformed results and aggregations
+        # Return both transformed results and aggregations (local facets from hit window)
         return {
             "results": chunks,
-            "aggregations": results.get("aggregations", {}),
+            "aggregations": build_local_aggs_from_chunks(chunks),
             "total": (
                 results.get("hits", {}).get("total", {}).get("value")
                 if isinstance(results.get("hits", {}).get("total"), dict)

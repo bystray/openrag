@@ -56,7 +56,7 @@ class TestSearchQualityGuard(unittest.TestCase):
             top_score=0.2,
             lex_max_score=None,
             lex_threshold=1.0,
-            hybrid_threshold=0.99,
+            hybrid_threshold=1.5,
             guard_enabled=True,
             is_wildcard=False,
         )
@@ -71,7 +71,7 @@ class TestSearchQualityGuard(unittest.TestCase):
             top_score=2.0,
             lex_max_score=0.0,
             lex_threshold=1.0,
-            hybrid_threshold=0.5,
+            hybrid_threshold=1.5,
             guard_enabled=True,
             is_wildcard=False,
         )
@@ -86,7 +86,7 @@ class TestSearchQualityGuard(unittest.TestCase):
             top_score=0.1,
             lex_max_score=0.05,
             lex_threshold=1.0,
-            hybrid_threshold=0.5,
+            hybrid_threshold=1.5,
             guard_enabled=True,
             is_wildcard=False,
         )
@@ -116,7 +116,7 @@ class TestSearchQualityGuard(unittest.TestCase):
             top_score=0.5,
             lex_max_score=3.0,
             lex_threshold=1.0,
-            hybrid_threshold=0.99,
+            hybrid_threshold=1.5,
             guard_enabled=True,
             is_wildcard=False,
         )
@@ -129,7 +129,7 @@ class TestSearchQualityGuard(unittest.TestCase):
             top_score=None,
             lex_max_score=0.0,
             lex_threshold=1.0,
-            hybrid_threshold=0.5,
+            hybrid_threshold=1.5,
             guard_enabled=True,
             is_wildcard=False,
         )
@@ -142,11 +142,14 @@ class TestSearchQualityGuard(unittest.TestCase):
 
     def test_noise_like(self):
         self.assertTrue(is_noise_like_query("qwerty123456"))
+        self.assertTrue(is_noise_like_query("abcdefgh"))
         self.assertFalse(is_noise_like_query("short"))
+        self.assertTrue(is_noise_like_query("a1"))
 
     def test_strict_lexical_single_token(self):
         self.assertTrue(query_requires_strict_lexical_evidence("word"))
         self.assertFalse(query_requires_strict_lexical_evidence("two words"))
+        self.assertTrue(query_requires_strict_lexical_evidence("two words 3"))
 
 
 if __name__ == "__main__":

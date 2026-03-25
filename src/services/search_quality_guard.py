@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def max_chunk_score(chunks: list[dict[str, Any]]) -> float | None:
@@ -18,17 +21,13 @@ def max_chunk_score(chunks: list[dict[str, Any]]) -> float | None:
 
 
 def is_noise_like_query(q: str) -> bool:
-    """Heuristic: long random-ish alphanumeric / digit-heavy strings."""
-    if len(q) < 8:
+    """Heuristic: any digits, or long unspaced strings (likely garbage / opaque tokens)."""
+    s = (q or "").strip()
+    if not s:
         return False
-    digits = sum(1 for c in q if c.isdigit())
-    alnum = sum(1 for c in q if c.isalnum())
-    if alnum == 0:
-        return False
-    if digits / len(q) >= 0.35:
+    if any(c.isdigit() for c in s):
         return True
-    tokens = q.split()
-    if len(tokens) == 1 and len(q) >= 10 and digits >= 3:
+    if len(s) > 6 and " " not in s:
         return True
     return False
 
@@ -61,23 +60,69 @@ def _apply_search_quality_guard(
     lex_max_score None: lexical probe failed — fail-open (keep results).
     """
     if not guard_enabled or is_wildcard:
+        logger.info(
+            "search_quality_guard decision",
+            branch="disabled_or_wildcard",
+            guard_enabled=guard_enabled,
+            is_wildcard=is_wildcard,
+            strict=None,
+            lex_ok=None,
+            hybrid_ok=None,
+            keep=True,
+        )
         return True, chunks
 
     if not chunks:
+        logger.info(
+            "search_quality_guard decision",
+            branch="empty_chunks",
+            strict=None,
+            lex_ok=None,
+            hybrid_ok=None,
+            keep=True,
+        )
         return True, chunks
 
     if lex_max_score is None:
+        strict = query_requires_strict_lexical_evidence(query)
+        logger.info(
+            "search_quality_guard decision",
+            branch="lex_probe_none_fail_open",
+            strict=strict,
+            lex_ok=None,
+            hybrid_ok=None,
+            keep=True,
+        )
         return True, chunks
 
     lex_ok = lex_max_score >= lex_threshold
+    strict = query_requires_strict_lexical_evidence(query)
+    top = top_score if top_score is not None else 0.0
+    hybrid_ok = top >= hybrid_threshold
 
-    if query_requires_strict_lexical_evidence(query):
+    if strict:
+        keep = lex_ok
+        logger.info(
+            "search_quality_guard decision",
+            branch="strict",
+            strict=True,
+            lex_ok=lex_ok,
+            hybrid_ok=hybrid_ok,
+            keep=keep,
+        )
         if lex_ok:
             return True, chunks
         return False, []
 
-    top = top_score if top_score is not None else 0.0
-    hybrid_ok = top >= hybrid_threshold
+    keep = lex_ok or hybrid_ok
+    logger.info(
+        "search_quality_guard decision",
+        branch="non_strict",
+        strict=False,
+        lex_ok=lex_ok,
+        hybrid_ok=hybrid_ok,
+        keep=keep,
+    )
     if lex_ok or hybrid_ok:
         return True, chunks
     return False, []
