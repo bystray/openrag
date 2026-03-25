@@ -6,6 +6,7 @@ from config.settings import EMBED_MODEL, clients, get_embedding_model, get_index
 from auth_context import get_auth_context
 from utils.logging_config import get_logger
 from utils.openrag_query_filters import EXACT_FILTER_FIELD_MAPPING, build_opensearch_filter_clauses
+from services import opensearch_search_engine as ose
 
 logger = get_logger(__name__)
 
@@ -236,7 +237,6 @@ class SearchService:
                         field_name: {
                             "vector": embedding_vector,
                             "k": 50,
-                            "num_candidates": 1000,
                         }
                     }
                 })
@@ -379,8 +379,94 @@ class SearchService:
 
         search_params = {"terminate_after": 0}
 
+        def _build_local_aggs_from_chunks(chunks: list[dict[str, Any]]) -> dict[str, Any]:
+            # Safest first implementation: build facets from returned window only.
+            def buckets_for(field: str, size: int) -> list[dict[str, Any]]:
+                counts: dict[str, int] = {}
+                for c in chunks:
+                    v = c.get(field)
+                    if v is None:
+                        continue
+                    key = str(v)
+                    if not key:
+                        continue
+                    counts[key] = counts.get(key, 0) + 1
+                items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:size]
+                return [{"key": k, "doc_count": n} for k, n in items]
+
+            return {
+                "data_sources": {"buckets": buckets_for("filename", 20)},
+                "document_types": {"buckets": buckets_for("mimetype", 10)},
+                "owners": {"buckets": buckets_for("owner", 10)},
+                "connector_types": {"buckets": buckets_for("connector_type", 10)},
+                "embedding_models": {"buckets": buckets_for("embedding_model", 10)},
+            }
+
         try:
             index_name = get_index_name()
+
+            # PR-4: Use engine only for heterogeneous aliases (non-wildcard).
+            if not is_wildcard_match_all:
+                try:
+                    physical_indices, is_alias = await ose.async_get_physical_indices(
+                        opensearch_client, index_name
+                    )
+                    topology = (
+                        await ose.async_detect_search_topology(opensearch_client, physical_indices)
+                        if is_alias
+                        else "single_index"
+                    )
+                except Exception as engine_err:
+                    logger.warning(
+                        "Engine topology detection failed; falling back to legacy search",
+                        error=str(engine_err),
+                    )
+                    topology = "engine_failed"
+
+                if topology == "heterogeneous_alias":
+                    merged_hits = await ose.async_run_heterogeneous_alias_search(
+                        client=opensearch_client,
+                        query_text=query,
+                        filter_clauses=filter_clauses,
+                        limit=limit,
+                        score_threshold=score_threshold,
+                        query_embeddings=query_embeddings,
+                        # Safety: our clusters may not support num_candidates. Engine avoids injecting it anyway.
+                        use_num_candidates=False,
+                        num_candidates=0,
+                        physical_indices=physical_indices,
+                        get_embedding_field_name=get_embedding_field_name,
+                        log_fn=lambda m: logger.info(m),
+                    )
+                    chunks: list[dict[str, Any]] = []
+                    for mh in merged_hits:
+                        meta = mh.metadata or {}
+                        chunks.append(
+                            {
+                                "filename": meta.get("filename"),
+                                "mimetype": meta.get("mimetype"),
+                                "page": meta.get("page"),
+                                "text": mh.page_content,
+                                "score": mh.score,
+                                "source_url": meta.get("source_url"),
+                                "owner": meta.get("owner"),
+                                "owner_name": meta.get("owner_name"),
+                                "owner_email": meta.get("owner_email"),
+                                "file_size": meta.get("file_size"),
+                                "connector_type": meta.get("connector_type"),
+                                "embedding_model": meta.get("embedding_model"),
+                                "embedding_dimensions": meta.get("embedding_dimensions"),
+                                "allowed_users": meta.get("allowed_users", []),
+                                "allowed_groups": meta.get("allowed_groups", []),
+                            }
+                        )
+
+                    return {
+                        "results": chunks,
+                        "aggregations": _build_local_aggs_from_chunks(chunks),
+                        "total": len(chunks),
+                    }
+
             logger.info(f"Sending query to index '{index_name}'..")
             results = await opensearch_client.search(
                 index=index_name, body=search_body, params=search_params
