@@ -125,6 +125,17 @@ WEBHOOK_BASE_URL = os.getenv(
     "WEBHOOK_BASE_URL"
 )  # No default - must be explicitly configured
 
+# Optional /api/search quality guard (PR-5): suppress low-signal hybrid hits
+SEARCH_QUALITY_GUARD_ENABLED = os.getenv(
+    "SEARCH_QUALITY_GUARD_ENABLED", "false"
+).lower() in ("true", "1", "yes")
+SEARCH_QUALITY_GUARD_HYBRID_THRESHOLD = get_env_float(
+    "SEARCH_QUALITY_GUARD_HYBRID_THRESHOLD", 0.5
+)
+SEARCH_QUALITY_GUARD_LEX_THRESHOLD = get_env_float(
+    "SEARCH_QUALITY_GUARD_LEX_THRESHOLD", 1.0
+)
+
 # OpenSearch configuration
 VECTOR_DIM = 1536
 KNN_EF_CONSTRUCTION = 100

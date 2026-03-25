@@ -1,14 +1,136 @@
 import copy
-import json
 from typing import Any, Dict
 from agentd.tool_decorator import tool
-from config.settings import EMBED_MODEL, clients, get_embedding_model, get_index_name, WATSONX_EMBEDDING_DIMENSIONS
+from config.settings import (
+    EMBED_MODEL,
+    SEARCH_QUALITY_GUARD_ENABLED,
+    SEARCH_QUALITY_GUARD_HYBRID_THRESHOLD,
+    SEARCH_QUALITY_GUARD_LEX_THRESHOLD,
+    clients,
+    get_embedding_model,
+    get_index_name,
+    WATSONX_EMBEDDING_DIMENSIONS,
+)
 from auth_context import get_auth_context
 from utils.logging_config import get_logger
 from utils.openrag_query_filters import EXACT_FILTER_FIELD_MAPPING, build_opensearch_filter_clauses
 from services import opensearch_search_engine as ose
+from services.search_quality_guard import _apply_search_quality_guard, max_chunk_score
 
 logger = get_logger(__name__)
+
+
+def build_local_aggs_from_chunks(chunks: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build facet-like aggregations from the returned chunk window (same keys as legacy aggs)."""
+
+    def buckets_for(field: str, size: int) -> list[dict[str, Any]]:
+        counts: dict[str, int] = {}
+        for c in chunks:
+            v = c.get(field)
+            if v is None:
+                continue
+            key = str(v)
+            if not key:
+                continue
+            counts[key] = counts.get(key, 0) + 1
+        items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:size]
+        return [{"key": k, "doc_count": n} for k, n in items]
+
+    return {
+        "data_sources": {"buckets": buckets_for("filename", 20)},
+        "document_types": {"buckets": buckets_for("mimetype", 10)},
+        "owners": {"buckets": buckets_for("owner", 10)},
+        "connector_types": {"buckets": buckets_for("connector_type", 10)},
+        "embedding_models": {"buckets": buckets_for("embedding_model", 10)},
+    }
+
+
+async def _run_lexical_probe(
+    opensearch_client: Any,
+    index_name: str,
+    query: str,
+    hybrid_filter_for_probe: list[dict[str, Any]],
+    search_params: dict[str, Any],
+) -> float:
+    """Strict lexical multi_match (no KNN); max score of top hit as evidence signal."""
+    bool_query: dict[str, Any] = {
+        "must": [
+            {
+                "multi_match": {
+                    "query": query,
+                    "fields": ["text^2", "filename^1.5"],
+                    "type": "best_fields",
+                    "fuzziness": 0,
+                }
+            }
+        ],
+    }
+    if hybrid_filter_for_probe:
+        bool_query["filter"] = hybrid_filter_for_probe
+
+    body: dict[str, Any] = {
+        "query": {"bool": bool_query},
+        "size": 1,
+        "_source": False,
+    }
+    resp = await opensearch_client.search(
+        index=index_name, body=body, params=search_params
+    )
+    hits = resp.get("hits", {}).get("hits", [])
+    if not hits:
+        return 0.0
+    return float(hits[0].get("_score") or 0.0)
+
+
+async def _apply_guard_to_chunks(
+    *,
+    query: str,
+    chunks: list[dict[str, Any]],
+    is_wildcard_match_all: bool,
+    hybrid_filter_for_probe: list[dict[str, Any]] | None,
+    opensearch_client: Any,
+    index_name: str,
+) -> tuple[list[dict[str, Any]], bool]:
+    """
+    Optionally filter chunks via quality guard. Returns (chunks, blocked_by_guard).
+    """
+    if (
+        not SEARCH_QUALITY_GUARD_ENABLED
+        or is_wildcard_match_all
+        or hybrid_filter_for_probe is None
+    ):
+        return chunks, False
+
+    lex_max: float | None = None
+    try:
+        lex_max = await _run_lexical_probe(
+            opensearch_client,
+            index_name,
+            query,
+            hybrid_filter_for_probe,
+            {"terminate_after": 0},
+        )
+    except Exception as e:
+        logger.warning(
+            "Lexical quality probe failed; fail-open (keeping results)",
+            error=str(e),
+        )
+        lex_max = None
+
+    top = max_chunk_score(chunks)
+    keep, out = _apply_search_quality_guard(
+        query,
+        chunks,
+        top,
+        lex_max,
+        SEARCH_QUALITY_GUARD_LEX_THRESHOLD,
+        SEARCH_QUALITY_GUARD_HYBRID_THRESHOLD,
+        SEARCH_QUALITY_GUARD_ENABLED,
+        is_wildcard_match_all,
+    )
+    if not keep:
+        return [], True
+    return out, False
 
 MAX_EMBED_RETRIES = 3
 EMBED_RETRY_INITIAL_DELAY = 1.0
@@ -217,6 +339,9 @@ class SearchService:
             # Wildcard query - no embedding needed
             filter_clauses = build_opensearch_filter_clauses(filters)
 
+        # Same filters as hybrid query (incl. exists embedding) for lexical probe / DLS alignment
+        hybrid_filter_for_probe: list[dict[str, Any]] | None = None
+
         # Build query body
         if is_wildcard_match_all:
             # Match all documents; still allow filters to narrow scope
@@ -251,6 +376,7 @@ class SearchService:
 
             # Add exists filter to existing filters
             all_filters = [*filter_clauses, exists_any_embedding]
+            hybrid_filter_for_probe = all_filters
 
             logger.debug(
                 "Building hybrid query with filters",
@@ -379,29 +505,6 @@ class SearchService:
 
         search_params = {"terminate_after": 0}
 
-        def _build_local_aggs_from_chunks(chunks: list[dict[str, Any]]) -> dict[str, Any]:
-            # Safest first implementation: build facets from returned window only.
-            def buckets_for(field: str, size: int) -> list[dict[str, Any]]:
-                counts: dict[str, int] = {}
-                for c in chunks:
-                    v = c.get(field)
-                    if v is None:
-                        continue
-                    key = str(v)
-                    if not key:
-                        continue
-                    counts[key] = counts.get(key, 0) + 1
-                items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:size]
-                return [{"key": k, "doc_count": n} for k, n in items]
-
-            return {
-                "data_sources": {"buckets": buckets_for("filename", 20)},
-                "document_types": {"buckets": buckets_for("mimetype", 10)},
-                "owners": {"buckets": buckets_for("owner", 10)},
-                "connector_types": {"buckets": buckets_for("connector_type", 10)},
-                "embedding_models": {"buckets": buckets_for("embedding_model", 10)},
-            }
-
         try:
             index_name = get_index_name()
 
@@ -461,9 +564,23 @@ class SearchService:
                             }
                         )
 
+                    chunks, blocked = await _apply_guard_to_chunks(
+                        query=query,
+                        chunks=chunks,
+                        is_wildcard_match_all=is_wildcard_match_all,
+                        hybrid_filter_for_probe=hybrid_filter_for_probe,
+                        opensearch_client=opensearch_client,
+                        index_name=index_name,
+                    )
+                    if blocked:
+                        return {
+                            "results": [],
+                            "aggregations": build_local_aggs_from_chunks([]),
+                            "total": 0,
+                        }
                     return {
                         "results": chunks,
-                        "aggregations": _build_local_aggs_from_chunks(chunks),
+                        "aggregations": build_local_aggs_from_chunks(chunks),
                         "total": len(chunks),
                     }
 
@@ -568,6 +685,21 @@ class SearchService:
                     "allowed_groups": source.get("allowed_groups", []),
                 }
             )
+
+        chunks, blocked = await _apply_guard_to_chunks(
+            query=query,
+            chunks=chunks,
+            is_wildcard_match_all=is_wildcard_match_all,
+            hybrid_filter_for_probe=hybrid_filter_for_probe,
+            opensearch_client=opensearch_client,
+            index_name=index_name,
+        )
+        if blocked:
+            return {
+                "results": [],
+                "aggregations": build_local_aggs_from_chunks([]),
+                "total": 0,
+            }
 
         # Return both transformed results and aggregations
         return {
