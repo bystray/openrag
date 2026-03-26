@@ -11,6 +11,7 @@ from openai import AsyncOpenAI
 from config.settings import get_index_name, get_openrag_config
 from services.logistics_requests_service import LOGISTICS_REQUESTS_INDEX
 from utils.logging_config import get_logger
+from utils.opensearch_queries import build_filename_query
 
 logger = get_logger(__name__)
 
@@ -222,19 +223,21 @@ class LogisticsExtractionService:
         Возвращает список уникальных filename — кандидатов на логистические заявки.
         Фильтр: mimetype = application/pdf, в тексте хотя бы одна из ключевых фраз.
         """
+        # mimetype хранится как text + mimetype.keyword; term по полному "application/pdf" на text не матчится (токены application, pdf).
+        pdf_filter = {"term": {"mimetype.keyword": "application/pdf"}}
         if only_filename:
             # Проверяем, что файл есть и pdf
             body = {
                 "query": {
                     "bool": {
                         "filter": [
-                            {"term": {"filename": only_filename}},
-                            {"term": {"mimetype": "application/pdf"}},
+                            build_filename_query(only_filename),
+                            pdf_filter,
                         ]
                     }
                 },
                 "size": 0,
-                "aggs": {"names": {"terms": {"field": "filename", "size": 1}}},
+                "aggs": {"names": {"terms": {"field": "filename.keyword", "size": 1}}},
             }
         else:
             should_clauses = [
@@ -243,14 +246,14 @@ class LogisticsExtractionService:
             body = {
                 "query": {
                     "bool": {
-                        "filter": [{"term": {"mimetype": "application/pdf"}}],
+                        "filter": [pdf_filter],
                         "must": [{"bool": {"should": should_clauses, "minimum_should_match": 1}}],
                     }
                 },
                 "size": 0,
                 "aggs": {
                     "unique_filenames": {
-                        "terms": {"field": "filename", "size": 10000}
+                        "terms": {"field": "filename.keyword", "size": 10000}
                     }
                 },
             }
@@ -275,7 +278,6 @@ class LogisticsExtractionService:
 
     async def load_chunk_texts_by_filename(self, filename: str) -> List[str]:
         """Загружает все поля text из индекса documents для данного filename."""
-        from utils.opensearch_queries import build_filename_query
         body = {
             "query": build_filename_query(filename),
             "size": 10000,
