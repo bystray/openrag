@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useCreateApiKeyMutation } from "@/app/api/mutations/useCreateApiKeyMutation";
 import { useRevokeApiKeyMutation } from "@/app/api/mutations/useRevokeApiKeyMutation";
@@ -73,6 +73,11 @@ function KnowledgeSourcesPage() {
   const focusLlmModel = searchParams.get("focusLlmModel") === "true";
   // Use a trigger state that changes each time we detect the query param
   const [openLlmSelector, setOpenLlmSelector] = useState(false);
+  const [pendingEmbeddingModel, setPendingEmbeddingModel] = useState<
+    string | null
+  >(null);
+  const isEmbeddingModelSaving = pendingEmbeddingModel !== null;
+  const embeddingUpdateToastIdRef = useRef<string | number | null>(null);
 
   // API Keys state
   const [createKeyDialogOpen, setCreateKeyDialogOpen] = useState(false);
@@ -342,15 +347,49 @@ function KnowledgeSourcesPage() {
 
   // Update embedding model selection immediately (also updates provider)
   const handleEmbeddingModelChange = (newModel: string, provider?: string) => {
-    if (newModel && provider) {
-      updateSettingsMutation.mutate({
-        embedding_model: newModel,
-        embedding_provider: provider,
-      });
-    } else if (newModel) {
-      updateSettingsMutation.mutate({ embedding_model: newModel });
+    const currentModel = settings.knowledge?.embedding_model || "";
+    if (isEmbeddingModelSaving || !newModel || newModel === currentModel) {
+      return;
     }
+    setPendingEmbeddingModel(newModel);
+    embeddingUpdateToastIdRef.current = toast.loading(
+      `Updating embedding model to ${newModel}...`,
+    );
+
+    const payload = provider
+      ? {
+          embedding_model: newModel,
+          embedding_provider: provider,
+        }
+      : { embedding_model: newModel };
+
+    updateSettingsMutation.mutate(payload, {
+      onError: () => {
+        if (embeddingUpdateToastIdRef.current !== null) {
+          toast.dismiss(embeddingUpdateToastIdRef.current);
+          embeddingUpdateToastIdRef.current = null;
+        }
+        setPendingEmbeddingModel(null);
+      },
+      onSettled: () => {
+        // Keep the selector locked until settings query reflects the requested model.
+        // Fallback unlock on error is handled in onError above.
+      },
+    });
   };
+
+  useEffect(() => {
+    if (
+      pendingEmbeddingModel &&
+      settings.knowledge?.embedding_model === pendingEmbeddingModel
+    ) {
+      if (embeddingUpdateToastIdRef.current !== null) {
+        toast.dismiss(embeddingUpdateToastIdRef.current);
+        embeddingUpdateToastIdRef.current = null;
+      }
+      setPendingEmbeddingModel(null);
+    }
+  }, [pendingEmbeddingModel, settings.knowledge?.embedding_model]);
 
   // Update chunk size setting with debounce
   const handleChunkSizeChange = (value: string) => {
@@ -899,9 +938,16 @@ function KnowledgeSourcesPage() {
                       : "No embedding models detected. Configure a provider first."
                   }
                   value={settings.knowledge?.embedding_model || ""}
+                  disabled={isEmbeddingModelSaving}
                   onValueChange={handleEmbeddingModelChange}
                 />
               </LabelWrapper>
+              {isEmbeddingModelSaving ? (
+                <p className="text-xs text-muted-foreground flex items-center gap-2">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Updating embedding model to {pendingEmbeddingModel}...
+                </p>
+              ) : null}
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">

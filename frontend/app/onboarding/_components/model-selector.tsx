@@ -42,6 +42,7 @@ export function ModelSelector({
   custom = false,
   hasError = false,
   defaultOpen = false,
+  disabled = false,
 }: {
   options?: ModelOption[];
   groupedOptions?: GroupedModelOption[];
@@ -54,6 +55,7 @@ export function ModelSelector({
   onValueChange: (value: string, provider?: string) => void;
   hasError?: boolean;
   defaultOpen?: boolean;
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const [searchValue, setSearchValue] = useState("");
@@ -92,7 +94,7 @@ export function ModelSelector({
         <Button
           variant="outline"
           role="combobox"
-          disabled={allOptions.length === 0}
+          disabled={disabled || allOptions.length === 0}
           aria-expanded={open}
           className={cn(
             "w-full gap-2 justify-between font-normal text-sm",
@@ -161,7 +163,11 @@ export function ModelSelector({
                       <CommandItem
                         key={option.value}
                         value={option.value}
+                        disabled={disabled}
                         onSelect={(currentValue) => {
+                          if (disabled) {
+                            return;
+                          }
                           if (currentValue !== value) {
                             onValueChange(currentValue, option.provider);
                           }
@@ -190,7 +196,11 @@ export function ModelSelector({
                   <CommandItem
                     key={option.value}
                     value={option.value}
+                    disabled={disabled}
                     onSelect={(currentValue) => {
+                      if (disabled) {
+                        return;
+                      }
                       if (currentValue !== value) {
                         onValueChange(currentValue, option.provider);
                       }
