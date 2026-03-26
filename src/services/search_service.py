@@ -3,6 +3,7 @@ from typing import Any, Dict
 from agentd.tool_decorator import tool
 from config.settings import (
     EMBED_MODEL,
+    LOG_LEVEL,
     SEARCH_QUALITY_GUARD_ENABLED,
     SEARCH_QUALITY_GUARD_HYBRID_THRESHOLD,
     SEARCH_QUALITY_GUARD_LEX_THRESHOLD,
@@ -12,16 +13,24 @@ from config.settings import (
     WATSONX_EMBEDDING_DIMENSIONS,
 )
 from auth_context import get_auth_context
-from utils.logging_config import get_logger
+from utils.logging_config import get_logger, log_event
 from utils.openrag_query_filters import EXACT_FILTER_FIELD_MAPPING, build_opensearch_filter_clauses
 from services import opensearch_search_engine as ose
 from services.search_quality_guard import (
     _apply_search_quality_guard,
     max_chunk_score,
-    query_requires_strict_lexical_evidence,
 )
 
 logger = get_logger(__name__)
+
+
+def _query_preview_for_log(query: str, max_len: int = 120) -> str:
+    if not isinstance(query, str):
+        return ""
+    q = query.strip()
+    if len(q) <= max_len:
+        return q
+    return q[:max_len] + "…"
 
 
 def build_local_aggs_from_chunks(chunks: list[dict[str, Any]]) -> dict[str, Any]:
@@ -73,7 +82,7 @@ async def _filter_query_embeddings_for_safe_knn(
     index_name: str,
     query_embeddings: dict[str, list[float]],
     get_embedding_field_name,
-) -> dict[str, list[float]]:
+) -> tuple[dict[str, list[float]], list[str]]:
     """
     Keep only models whose embedding field exists as knn_vector on every physical
     index behind the alias, with matching dimension. Avoids OpenSearch errors like
@@ -82,7 +91,7 @@ async def _filter_query_embeddings_for_safe_knn(
     Empty dict => caller should use lexical-only hybrid (no KNN clauses).
     """
     if not query_embeddings:
-        return {}
+        return {}, []
 
     try:
         physical_indices, _ = await ose.async_get_physical_indices(
@@ -93,57 +102,48 @@ async def _filter_query_embeddings_for_safe_knn(
             "Could not resolve physical indices for safe KNN; lexical-only fallback",
             error=str(e),
         )
-        return {}
+        return {}, []
 
     if not physical_indices:
-        return {}
+        return {}, []
 
     allowed: dict[str, list[float]] = {}
+    debug_filtered_out: dict[str, str] | None = (
+        {} if LOG_LEVEL == "DEBUG" else None
+    )
     for model_name, embedding_vector in query_embeddings.items():
         field_name = get_embedding_field_name(model_name)
         dim = len(embedding_vector)
         ok_all = True
+        drop_reason: str | None = None
         for phys in physical_indices:
             props = await ose.async_get_index_properties_for(opensearch_client, phys)
             knn_fields = ose.extract_knn_fields(props)
             if field_name not in knn_fields:
                 ok_all = False
-                logger.debug(
-                    "KNN field not on index; skipping model for legacy hybrid KNN",
-                    index=phys,
-                    field=field_name,
-                    model=model_name,
-                )
+                drop_reason = f"field_not_knn_vector:{phys}"
                 break
             field_dim = knn_fields.get(field_name)
             if field_dim is not None and field_dim != dim:
                 ok_all = False
-                logger.debug(
-                    "KNN dimension mismatch; skipping model for legacy hybrid KNN",
-                    index=phys,
-                    field=field_name,
-                    model=model_name,
-                    expected_dim=field_dim,
-                    query_dim=dim,
-                )
+                drop_reason = f"dim_mismatch:{phys}:{field_dim}!={dim}"
                 break
         if ok_all:
             allowed[model_name] = embedding_vector
+        elif debug_filtered_out is not None and drop_reason is not None:
+            debug_filtered_out[model_name] = drop_reason
 
-    if not allowed:
-        logger.info(
-            "No embedding field is knn_vector on all backing indices; using lexical-only hybrid",
-            index_name=index_name,
-            physical_indices=physical_indices,
-        )
-    elif len(allowed) < len(query_embeddings):
-        logger.info(
-            "Filtered KNN models to those safe on all backing indices",
-            kept_models=list(allowed.keys()),
-            dropped_models=[m for m in query_embeddings if m not in allowed],
+    if LOG_LEVEL == "DEBUG":
+        log_event(
+            logger,
+            "knn_filtering",
+            level="debug",
+            input_models=list(query_embeddings.keys()),
+            valid_models=list(allowed.keys()),
+            filtered_out=debug_filtered_out or {},
         )
 
-    return allowed
+    return allowed, list(physical_indices)
 
 
 async def _run_lexical_probe(
@@ -193,13 +193,6 @@ async def _run_lexical_probe(
 
     hits = resp.get("hits", {}).get("hits", [])
     top_score = float(hits[0].get("_score") or 0.0) if hits else 0.0
-    logger.info(
-        "search_quality_guard lexical_probe",
-        query_preview=query[:80] if query else None,
-        index_name=index_name,
-        hit_count=len(hits),
-        top_score=top_score,
-    )
     if not hits:
         return 0.0
     return top_score
@@ -222,13 +215,6 @@ async def _apply_guard_to_chunks(
         or is_wildcard_match_all
         or hybrid_filter_for_probe is None
     ):
-        logger.info(
-            "search_quality_guard skipped",
-            query_preview=query[:80] if query else None,
-            SEARCH_QUALITY_GUARD_ENABLED=SEARCH_QUALITY_GUARD_ENABLED,
-            is_wildcard_match_all=is_wildcard_match_all,
-            hybrid_filter_for_probe_is_none=hybrid_filter_for_probe is None,
-        )
         return chunks, False
 
     lex_max: float | None = None
@@ -258,17 +244,19 @@ async def _apply_guard_to_chunks(
         SEARCH_QUALITY_GUARD_ENABLED,
         is_wildcard_match_all,
     )
-    logger.info(
-        "search_quality_guard apply",
-        query_preview=query[:80] if query else None,
-        SEARCH_QUALITY_GUARD_ENABLED=SEARCH_QUALITY_GUARD_ENABLED,
-        is_wildcard_match_all=is_wildcard_match_all,
-        hybrid_filter_for_probe_is_none=False,
-        lex_max_score=lex_max,
-        query_requires_strict_lexical_evidence=query_requires_strict_lexical_evidence(query),
-        top_score=top,
-        keep=keep,
+    if not keep:
+        reason = "blocked"
+    elif lex_max is None:
+        reason = "fail_open"
+    else:
+        reason = "passed"
+    log_event(
+        logger,
+        "quality_guard",
         blocked=not keep,
+        lex_score=lex_max,
+        hybrid_score=top,
+        reason=reason,
     )
     if not keep:
         return [], True
@@ -313,11 +301,11 @@ class SearchService:
         embedding_model = embedding_model or get_embedding_model() or EMBED_MODEL
         embedding_field_name = get_embedding_field_name(embedding_model)
 
-        logger.info(
+        logger.debug(
             "Search with embedding model",
             embedding_model=embedding_model,
             embedding_field=embedding_field_name,
-            query_preview=query[:50] if query else None,
+            query_preview=_query_preview_for_log(query, 50),
         )
 
         # Get authentication context from the current async context
@@ -379,11 +367,11 @@ class SearchService:
                     # Fallback to configured model if no documents indexed yet
                     available_models = [embedding_model]
 
-                logger.info(
+                logger.debug(
                     "Detected embedding models in corpus",
                     available_models=available_models,
                     model_counts={b["key"]: b["doc_count"] for b in buckets},
-                    with_filters=len(filter_clauses) > 0
+                    with_filters=len(filter_clauses) > 0,
                 )
             except Exception as e:
                 logger.warning("Failed to detect embedding models, using configured model", error=str(e))
@@ -472,17 +460,30 @@ class SearchService:
                     model_name, embedding = result
                     query_embeddings[model_name] = embedding
 
-            logger.info(
+            logger.debug(
                 "Generated query embeddings",
                 models=list(query_embeddings.keys()),
-                query_preview=query[:50]
+                query_preview=_query_preview_for_log(query, 50),
             )
 
-            query_embeddings = await _filter_query_embeddings_for_safe_knn(
-                opensearch_client,
-                get_index_name(),
-                query_embeddings,
-                get_embedding_field_name,
+            query_embeddings, physical_index_names = (
+                await _filter_query_embeddings_for_safe_knn(
+                    opensearch_client,
+                    get_index_name(),
+                    query_embeddings,
+                    get_embedding_field_name,
+                )
+            )
+            log_event(
+                logger,
+                "search_mode",
+                mode="hybrid" if query_embeddings else "lexical_only",
+                knn_fields=(
+                    [get_embedding_field_name(m) for m in query_embeddings]
+                    if query_embeddings
+                    else []
+                ),
+                indices=physical_index_names,
             )
         else:
             # Wildcard query - no embedding needed
@@ -677,7 +678,11 @@ class SearchService:
                         num_candidates=0,
                         physical_indices=physical_indices,
                         get_embedding_field_name=get_embedding_field_name,
-                        log_fn=lambda m: logger.info(m),
+                        log_fn=(
+                            (lambda m: logger.debug(m))
+                            if LOG_LEVEL == "DEBUG"
+                            else (lambda _m: None)
+                        ),
                     )
                     chunks: list[dict[str, Any]] = []
                     for mh in merged_hits:
@@ -722,7 +727,6 @@ class SearchService:
                         "total": len(chunks),
                     }
 
-            logger.info(f"Sending query to index '{index_name}'..")
             results = await opensearch_client.search(
                 index=index_name, body=search_body, params=search_params
             )
@@ -742,17 +746,23 @@ class SearchService:
                         params=search_params,
                     )
                 except RequestError as retry_error:
-                    logger.error(
-                        "OpenSearch retry without num_candidates failed",
+                    log_event(
+                        logger,
+                        "search_failed",
+                        level="error",
+                        query=_query_preview_for_log(query),
                         error=str(retry_error),
-                        search_body=fallback_search_body,
+                        index=get_index_name(),
                     )
                     raise
             else:
-                logger.error(
-                    "OpenSearch query failed",
+                log_event(
+                    logger,
+                    "search_failed",
+                    level="error",
+                    query=_query_preview_for_log(query),
                     error=error_message,
-                    search_body=search_body,
+                    index=get_index_name(),
                 )
                 raise
         except Exception as e:
@@ -761,11 +771,14 @@ class SearchService:
             if hasattr(e, "info") and isinstance(getattr(e, "info"), dict):
                 err = getattr(e, "info", {}).get("error", {})
                 root_cause = err.get("root_cause") or err.get("reason", str(e))
-            logger.error(
-                "OpenSearch query failed",
+            log_event(
+                logger,
+                "search_failed",
+                level="error",
+                query=_query_preview_for_log(query),
                 error=error_message,
+                index=get_index_name(),
                 root_cause=root_cause,
-                search_body=search_body,
             )
             raise
 

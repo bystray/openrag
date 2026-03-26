@@ -139,13 +139,22 @@ def get_logger(name: str = None) -> structlog.BoundLogger:
     return structlog.get_logger()
 
 
+def log_event(logger, event: str, level: str = "info", **fields) -> None:
+    """Emit a single structured event (stable `event` name for ELK / log aggregation)."""
+    log_fn = getattr(logger, level.lower(), logger.info)
+    log_fn(event, **fields)
+
+
 # Convenience function to configure logging from environment
-def configure_from_env() -> None:
-    """Configure logging from environment variables."""
-    log_level = os.getenv("LOG_LEVEL", "INFO")
+def configure_from_env(log_level: str | None = None) -> None:
+    """Configure logging from environment variables.
+
+    If log_level is None, reads LOG_LEVEL from the environment (default INFO).
+    """
+    level = log_level if log_level is not None else os.getenv("LOG_LEVEL", "INFO")
     json_logs = os.getenv("LOG_FORMAT", "").lower() == "json"
     service_name = os.getenv("SERVICE_NAME", "openrag")
 
     configure_logging(
-        log_level=log_level, json_logs=json_logs, service_name=service_name
+        log_level=level, json_logs=json_logs, service_name=service_name
     )

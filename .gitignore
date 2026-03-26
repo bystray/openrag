@@ -36,6 +36,7 @@ opensearch-data/
 node_modules
 
 # AI Tools
+.cursor/debug-*.log
 /.claude
 /CLAUDE.md
 /.gemini

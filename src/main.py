@@ -69,6 +69,7 @@ from config.settings import (
     INGESTION_TIMEOUT,
     INDEX_BODY,
     LANGFLOW_URL_INGEST_FLOW_ID,
+    LOG_LEVEL,
     SESSION_SECRET,
     clients,
     config_manager,
@@ -95,7 +96,7 @@ from services.search_service import SearchService
 from services.task_service import TaskService
 from session_manager import SessionManager
 
-configure_from_env()
+configure_from_env(log_level=LOG_LEVEL)
 logger = get_logger(__name__)
 
 # Files to exclude from startup ingestion

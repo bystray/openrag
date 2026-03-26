@@ -19,6 +19,9 @@ load_dotenv("../", override=False)
 
 logger = get_logger(__name__)
 
+# Logging (used by main + search telemetry; structlog configured in utils.logging_config)
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+
 # Environment variables
 OPENSEARCH_HOST = os.getenv("OPENSEARCH_HOST", "localhost")
 OPENSEARCH_PORT = get_env_int("OPENSEARCH_PORT", 9200)
