@@ -49,8 +49,12 @@ def get_physical_indices(client: OpenSearch, index_name: str) -> tuple[list[str]
         alias_map = client.indices.get_alias(name=index_name)
         if isinstance(alias_map, dict) and len(alias_map) > 0:
             return list(alias_map.keys()), True
-    except OpenSearchException:
-        pass
+    except Exception as e:
+        logger.warning(
+            "get_alias failed for '%s' (using index name as target): %s",
+            index_name,
+            e,
+        )
     return [index_name], False
 
 
@@ -170,13 +174,8 @@ def build_heterogeneous_search_body(
         ],
         "size": limit,
     }
-    if include_aggs:
-        body["aggs"] = {
-            "data_sources": {"terms": {"field": "filename", "size": 20}},
-            "document_types": {"terms": {"field": "mimetype", "size": 10}},
-            "owners": {"terms": {"field": "owner", "size": 10}},
-            "embedding_models": {"terms": {"field": "embedding_model", "size": 10}},
-        }
+    # include_aggs retained for API compatibility; facet terms on filename/mimetype were removed
+    # (text fielddata + heterogeneous indices). No default aggs here.
     if isinstance(score_threshold, (int, float)) and score_threshold > 0:
         body["min_score"] = score_threshold
     return body
@@ -222,8 +221,12 @@ async def async_get_physical_indices(client: Any, index_name: str) -> tuple[list
         alias_map = await _maybe_await(client.indices.get_alias(name=index_name))
         if isinstance(alias_map, dict) and len(alias_map) > 0:
             return list(alias_map.keys()), True
-    except OpenSearchException:
-        pass
+    except Exception as e:
+        logger.warning(
+            "async get_alias failed for '%s' (using index name as target): %s",
+            index_name,
+            e,
+        )
     return [index_name], False
 
 

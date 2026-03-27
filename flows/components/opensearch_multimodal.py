@@ -1418,8 +1418,12 @@ class OpenSearchVectorStoreComponentMultimodalMultiEmbedding(LCVectorStoreCompon
             alias_map = client.indices.get_alias(name=self.index_name)
             if isinstance(alias_map, dict) and len(alias_map) > 0:
                 return list(alias_map.keys()), True
-        except OpenSearchException:
-            pass
+        except Exception as e:
+            logger.warning(
+                "Alias lookup failed for '%s' (using index name as target): %s",
+                self.index_name,
+                e,
+            )
         return [self.index_name], False
 
     def _get_index_properties_for(self, client: OpenSearch, index_name: str) -> dict[str, Any] | None:
@@ -1537,13 +1541,8 @@ class OpenSearchVectorStoreComponentMultimodalMultiEmbedding(LCVectorStoreCompon
             ],
             "size": limit,
         }
-        if include_aggs:
-            body["aggs"] = {
-                "data_sources": {"terms": {"field": "filename", "size": 20}},
-                "document_types": {"terms": {"field": "mimetype", "size": 10}},
-                "owners": {"terms": {"field": "owner", "size": 10}},
-                "embedding_models": {"terms": {"field": "embedding_model", "size": 10}},
-            }
+        # Do not add terms aggs on filename/mimetype/owner: legacy text mappings break
+        # with fielddata errors; retrieval does not require these facets in the Langflow path.
         if isinstance(score_threshold, (int, float)) and score_threshold > 0:
             body["min_score"] = score_threshold
         return body
@@ -1908,12 +1907,9 @@ class OpenSearchVectorStoreComponentMultimodalMultiEmbedding(LCVectorStoreCompon
         knn_queries_with_candidates = []
         knn_queries_without_candidates = []
 
-        raw_num_candidates = getattr(self, "num_candidates", 1000)
-        try:
-            num_candidates = int(raw_num_candidates) if raw_num_candidates is not None else 0
-        except (TypeError, ValueError):
-            num_candidates = 0
-        use_num_candidates = num_candidates > 0
+        # OpenSearch KNN DSL does not support Elasticsearch's "num_candidates"; never send it.
+        use_num_candidates = False
+        num_candidates = 0
 
         # Detect search topology for runtime routing
         physical_indices, is_alias = self._get_physical_indices(client)
@@ -1961,12 +1957,7 @@ class OpenSearchVectorStoreComponentMultimodalMultiEmbedding(LCVectorStoreCompon
                 }
             }
 
-            if use_num_candidates:
-                query_with_candidates = copy.deepcopy(base_query)
-            else:
-                query_with_candidates = base_query
-
-            knn_queries_with_candidates.append(query_with_candidates)
+            knn_queries_with_candidates.append(base_query)
             knn_queries_without_candidates.append(base_query)
 
         # Get limit and score threshold
@@ -2003,12 +1994,6 @@ class OpenSearchVectorStoreComponentMultimodalMultiEmbedding(LCVectorStoreCompon
                     ],
                     "filter": filter_clauses,
                 }
-            },
-            "aggs": {
-                "data_sources": {"terms": {"field": "filename", "size": 20}},
-                "document_types": {"terms": {"field": "mimetype", "size": 10}},
-                "owners": {"terms": {"field": "owner", "size": 10}},
-                "embedding_models": {"terms": {"field": "embedding_model", "size": 10}},
             },
             "_source": [
                 "filename",
@@ -2135,8 +2120,12 @@ class OpenSearchVectorStoreComponentMultimodalMultiEmbedding(LCVectorStoreCompon
         try:
             alias_map = client.indices.get_alias(name=self.index_name)
             is_heterogeneous_alias = isinstance(alias_map, dict) and len(alias_map) > 1
-        except OpenSearchException:
-            # Not an alias (or alias lookup unavailable) -> keep previous behavior.
+        except Exception as e:
+            logger.warning(
+                "Alias lookup for heterogeneous detection failed on '%s': %s",
+                self.index_name,
+                e,
+            )
             is_heterogeneous_alias = False
 
         # Combine user filters with embedding existence constraint only for
@@ -2177,12 +2166,6 @@ class OpenSearchVectorStoreComponentMultimodalMultiEmbedding(LCVectorStoreCompon
                     "filter": all_filters,
                 }
             },
-            "aggs": {
-                "data_sources": {"terms": {"field": "filename", "size": 20}},
-                "document_types": {"terms": {"field": "mimetype", "size": 10}},
-                "owners": {"terms": {"field": "owner", "size": 10}},
-                "embedding_models": {"terms": {"field": "embedding_model", "size": 10}},
-            },
             "_source": [
                 "filename",
                 "mimetype",
@@ -2213,7 +2196,7 @@ class OpenSearchVectorStoreComponentMultimodalMultiEmbedding(LCVectorStoreCompon
         except RequestError as e:
             error_message = str(e)
             lowered = error_message.lower()
-            if use_num_candidates and "num_candidates" in lowered:
+            if "num_candidates" in lowered:
                 logger.warning(
                     "Retrying search without num_candidates parameter due to cluster capabilities",
                     error=error_message,

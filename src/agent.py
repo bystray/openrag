@@ -1,6 +1,9 @@
+import json
+import os
 from http.client import HTTPException
+from typing import Any
 
-from utils.logging_config import get_logger
+from utils.logging_config import get_logger, log_event
 
 logger = get_logger(__name__)
 
@@ -265,6 +268,100 @@ async def async_response_stream(
         raise
 
 
+def _responses_api_short_dump(response: Any, max_len: int = 800) -> str:
+    """Compact, log-safe preview of a Responses API object (RCA)."""
+    if response is None:
+        return "response=None"
+    bits: list[str] = [f"type={type(response).__name__}"]
+    rid = getattr(response, "id", None)
+    if rid:
+        bits.append(f"id={rid}")
+    m = getattr(response, "model", None)
+    if m:
+        bits.append(f"model={m}")
+    st = getattr(response, "status", None)
+    if st is not None:
+        bits.append(f"status={st}")
+    err = getattr(response, "error", None)
+    if err is not None:
+        bits.append(f"error={err!r}")
+    try:
+        if hasattr(response, "model_dump"):
+            s = json.dumps(
+                response.model_dump(), default=str, ensure_ascii=False
+            )
+            if len(s) > max_len:
+                s = s[:max_len] + "…"
+            bits.append(f"dump={s}")
+    except Exception:
+        bits.append(f"repr={repr(response)[:max_len]}")
+    return " | ".join(bits)
+
+
+def _extract_text_from_response_output(response: Any) -> str:
+    """Best-effort text from output items when ``output_text`` is unavailable."""
+    out = getattr(response, "output", None) or []
+    parts: list[str] = []
+    for item in out:
+        t = getattr(item, "type", None)
+        if t == "message":
+            for block in getattr(item, "content", None) or []:
+                bt = getattr(block, "type", None)
+                if bt in ("output_text", "text"):
+                    parts.append(getattr(block, "text", "") or "")
+        elif t in ("output_text", "text"):
+            parts.append(getattr(item, "text", "") or "")
+    return "".join(parts).strip()
+
+
+def _langflow_response_ok_metadata(response: Any) -> dict[str, Any]:
+    """Fields for langflow_responses_create_ok (no secrets)."""
+    if response is None:
+        return {
+            "response_id": None,
+            "has_output": False,
+            "has_error": False,
+            "output_len": 0,
+            "output_types_preview": [],
+        }
+    rid = getattr(response, "id", None) or getattr(response, "response_id", None)
+    api_err = getattr(response, "error", None)
+    raw_output = getattr(response, "output", None)
+    types: list[str] = []
+    if isinstance(raw_output, (list, tuple)):
+        for item in raw_output[:12]:
+            types.append(str(getattr(item, "type", type(item).__name__)))
+    out_len = (
+        len(raw_output)
+        if isinstance(raw_output, (list, tuple))
+        else (0 if raw_output is None else 1)
+    )
+    return {
+        "response_id": rid,
+        "has_output": raw_output is not None,
+        "has_error": api_err is not None,
+        "output_len": out_len,
+        "output_types_preview": types,
+    }
+
+
+def _langflow_optional_response_dump(response: Any, meta: dict[str, Any]) -> str | None:
+    """Full short_dump only at DEBUG or on anomaly (empty output / API error)."""
+    debug = os.getenv("LOG_LEVEL", "INFO").upper() == "DEBUG"
+    anomaly = (
+        response is None
+        or meta.get("has_error")
+        or not meta.get("has_output")
+    )
+    if debug or anomaly:
+        return (
+            _responses_api_short_dump(response)
+            if response is not None
+            else "response=None"
+        )
+    return None
+
+
 # Generic async response function for non-streaming
 async def async_response(
     client,
@@ -293,28 +390,136 @@ async def async_response(
             if hasattr(client, "api_key") and extra_headers is not None:
                 extra_headers["x-api-key"] = client.api_key
 
-        response = await client.responses.create(**request_params)
+        try:
+            response = await client.responses.create(**request_params)
+        except Exception as e:
+            if log_prefix == "langflow":
+                log_event(
+                    logger,
+                    "langflow_responses_create_failed",
+                    level="error",
+                    model=model,
+                    flow_id=model,
+                    exc_type=type(e).__name__,
+                    exc=str(e),
+                    previous_response_id=previous_response_id,
+                    has_extra_headers=bool(extra_headers),
+                    log_prefix=log_prefix,
+                )
+            raise
 
-        # Check if response has output_text using getattr to avoid issues with special objects
-        output_text = getattr(response, "output_text", None)
-        if output_text is not None:
-            response_text = output_text
-            logger.info("Response generated", log_prefix=log_prefix, response=response_text)
-
-            # Extract and store response_id if available
-            response_id = getattr(response, "id", None) or getattr(
-                response, "response_id", None
+        if log_prefix == "langflow":
+            _ok_meta = _langflow_response_ok_metadata(response)
+            _dump = _langflow_optional_response_dump(response, _ok_meta)
+            ok_fields: dict[str, Any] = {
+                "model": model,
+                "flow_id": model,
+                "response_id": _ok_meta["response_id"],
+                "has_output": _ok_meta["has_output"],
+                "has_error": _ok_meta["has_error"],
+                "output_len": _ok_meta["output_len"],
+                "output_types_preview": _ok_meta["output_types_preview"],
+                "log_prefix": log_prefix,
+            }
+            if _dump is not None:
+                ok_fields["response_dump"] = _dump
+            log_event(
+                logger,
+                "langflow_responses_create_ok",
+                level="info",
+                **ok_fields,
             )
 
-            return response_text, response_id, response
-        else:
-            msg = "Nudge response missing output_text"
-            error = getattr(response, "error", None)
-            if error:
-                error_msg = getattr(error, "message", None)
-                if error_msg:
-                    msg = error_msg
-            raise ValueError(msg)
+        if response is None:
+            log_event(
+                logger,
+                "responses_api_empty_output",
+                level="warning",
+                endpoint="responses.create",
+                reason="response_is_none",
+                log_prefix=log_prefix,
+                model=model,
+            )
+            return "", None, None
+
+        response_id = getattr(response, "id", None) or getattr(
+            response, "response_id", None
+        )
+
+        api_err = getattr(response, "error", None)
+        if api_err is not None:
+            log_event(
+                logger,
+                "responses_api_empty_output",
+                level="warning",
+                endpoint="responses.create",
+                reason="response_error_field",
+                log_prefix=log_prefix,
+                model=model,
+                response_id=response_id,
+                error=str(api_err),
+                response_dump=_responses_api_short_dump(response),
+            )
+
+        raw_output = getattr(response, "output", None)
+        if raw_output is None:
+            log_event(
+                logger,
+                "responses_api_empty_output",
+                level="warning",
+                endpoint="responses.create",
+                reason="output_is_none",
+                log_prefix=log_prefix,
+                model=model,
+                response_id=response_id,
+                response_dump=_responses_api_short_dump(response),
+            )
+            return "", response_id, response
+
+        response_text = ""
+        try:
+            # Do not use getattr(..., "output_text"): it still invokes the property and can
+            # raise TypeError when output was present but inconsistent; when output is None we already returned.
+            response_text = response.output_text or ""
+        except Exception as e:
+            log_event(
+                logger,
+                "responses_api_parse_failed",
+                level="warning",
+                endpoint="responses.create",
+                reason="output_text_access_failed",
+                log_prefix=log_prefix,
+                model=model,
+                response_id=response_id,
+                exc_type=type(e).__name__,
+                exc=str(e),
+                response_dump=_responses_api_short_dump(response),
+            )
+            response_text = _extract_text_from_response_output(response)
+
+        if not (response_text or "").strip():
+            response_text = _extract_text_from_response_output(response)
+
+        if not (response_text or "").strip():
+            log_event(
+                logger,
+                "responses_api_parse_failed",
+                level="warning",
+                endpoint="responses.create",
+                reason="no_text_extracted",
+                log_prefix=log_prefix,
+                model=model,
+                response_id=response_id,
+                response_dump=_responses_api_short_dump(response),
+            )
+
+        response_text = (response_text or "").strip()
+        if response_text:
+            logger.info(
+                "Response generated", log_prefix=log_prefix, response=response_text
+            )
+
+        return response_text, response_id, response
     except Exception as e:
         logger.error("Exception in non-streaming response", error=str(e))
         import traceback

@@ -2,7 +2,7 @@ import json
 from config.settings import NUDGES_FLOW_ID, clients, LANGFLOW_URL, LANGFLOW_CHAT_FLOW_ID
 from agent import async_chat, async_langflow, async_chat_stream
 from auth_context import set_auth_context
-from utils.logging_config import get_logger
+from utils.logging_config import get_logger, log_event
 
 logger = get_logger(__name__)
 
@@ -134,6 +134,18 @@ class ChatService:
         extra_headers["X-LANGFLOW-GLOBAL-VAR-OPENRAG-QUERY-FILTER"] = fq
         extra_headers["X-Langflow-Global-Var-OPENRAG-QUERY-FILTER"] = fq
         log_langflow_extra_headers(logger, "[LF] Langflow chat headers after filter (sanitized)", extra_headers)
+        log_event(
+            logger,
+            "langflow_chat_request",
+            level="info",
+            flow_id=LANGFLOW_CHAT_FLOW_ID,
+            has_jwt=bool(jwt_token),
+            selected_embedding_model=embedding_model,
+            index_name=idx_name,
+            has_query_filter=bool(filter_expression),
+            query_filter_size=len(fq),
+            query_filter_preview=(fq[:500] + "…") if len(fq) > 500 else fq,
+        )
         # Ensure the Langflow client exists; try lazy init if needed
         langflow_client = await clients.ensure_langflow_client()
         if not langflow_client:
