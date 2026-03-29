@@ -6,6 +6,14 @@ from utils.logging_config import get_logger, log_event
 
 logger = get_logger(__name__)
 
+# When nudges run without a chat thread, OpenSearch filters still apply via headers, but the
+# Langflow AgentExecutor still needs non-empty `input` (maps to user message in the flow).
+NUDGES_DEFAULT_USER_PROMPT = (
+    "Based on the knowledge filter and indexed content context above, suggest a few concise "
+    "follow-up questions the user might ask next about their documents. "
+    "Output one short question per line, no numbering."
+)
+
 
 class ChatService:
     async def chat(
@@ -297,6 +305,22 @@ class ChatService:
                     ]
                 )
                 prompt = f"{conversation_history}"
+
+        if not (prompt or "").strip():
+            prompt = NUDGES_DEFAULT_USER_PROMPT
+            log_event(
+                logger,
+                "nudges_using_default_seed_prompt",
+                level="info",
+                had_previous_response_id=bool(previous_response_id),
+            )
+        else:
+            log_event(
+                logger,
+                "nudges_prompt_from_conversation",
+                level="debug",
+                prompt_chars=len(prompt),
+            )
 
         from agent import async_langflow_chat
 

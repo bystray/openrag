@@ -9,6 +9,7 @@ openrag_user_role:
     - "indices:data/write/index"
     - "indices:data/read/scroll"
     - "indices:data/read/scroll/clear"
+    - "indices:admin/aliases/get"
     - "cluster:admin/opensearch/notifications/configs/create"
     - "cluster:admin/opensearch/notifications/configs/list"
     - "cluster:admin/opensearch/notifications/configs/get"
@@ -17,6 +18,11 @@ openrag_user_role:
     - "cluster:admin/opensearch/alerting/*"
 
   index_permissions:
+    - index_patterns:
+        - "*"
+      allowed_actions:
+        - indices:admin/aliases/get
+
     - index_patterns:
         - "documents"
         - "documents*"
@@ -31,6 +37,7 @@ openrag_user_role:
         - indices:admin/mappings/put
         - indices:admin/exists
         - indices:admin/get
+        - indices:admin/aliases/get
       dls: >
         {"bool":{"should":[
           {"term":{"owner":"${user.name}"}},

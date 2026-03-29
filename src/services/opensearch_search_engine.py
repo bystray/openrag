@@ -14,8 +14,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import copy
+import importlib.util
 import logging
 import inspect
+from pathlib import Path
 from typing import Any, Callable, Iterable, Awaitable, TypeVar
 
 from opensearchpy import OpenSearch
@@ -37,6 +39,24 @@ class MergedHit:
     page_content: str
     metadata: dict[str, Any]
     score: Any
+
+
+_FLOWS_ALIAS_SEARCH_MOD: Any | None = None
+
+
+def _get_flows_alias_search_module() -> Any:
+    """Load shared per-index merge implementation from flows/ (same logic as Langflow)."""
+    global _FLOWS_ALIAS_SEARCH_MOD
+    if _FLOWS_ALIAS_SEARCH_MOD is not None:
+        return _FLOWS_ALIAS_SEARCH_MOD
+    path = Path(__file__).resolve().parents[2] / "flows" / "opensearch_alias_search.py"
+    spec = importlib.util.spec_from_file_location("_openrag_opensearch_alias_search", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load OpenRAG alias search module from {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    _FLOWS_ALIAS_SEARCH_MOD = mod
+    return mod
 
 
 def get_physical_indices(client: OpenSearch, index_name: str) -> tuple[list[str], bool]:
@@ -295,57 +315,47 @@ async def async_run_heterogeneous_alias_search(
     get_embedding_field_name: Callable[[str], str],
     log_fn: LogFn | None = None,
 ) -> list[MergedHit]:
-    """Async variant of `run_heterogeneous_alias_search` (supports AsyncOpenSearch)."""
+    """Async per-index alias search; logic aligned with flows/opensearch_alias_search.py."""
+    mod = _get_flows_alias_search_module()
     per_index_hits: list[dict[str, Any]] = []
-    failed_indices = 0
+    failure_messages: list[str] = []
     per_index_limit = max(limit, limit * 2)
+    q = (query_text or "").strip()
 
     for idx_num, index_name in enumerate(physical_indices):
         properties = await async_get_index_properties_for(client, index_name)
         knn_fields = extract_knn_fields(properties)
-        available_models = await async_detect_available_models_for_index(client, index_name, filter_clauses)
-
-        local_knn_with_candidates: list[dict[str, Any]] = []
-        local_knn_without_candidates: list[dict[str, Any]] = []
-
-        for model_name, embedding_vector in query_embeddings.items():
-            field_name = get_embedding_field_name(model_name)
-            if available_models and model_name not in available_models:
-                continue
-            if field_name not in knn_fields:
-                continue
-            field_dim = knn_fields.get(field_name)
-            if field_dim is not None and field_dim != len(embedding_vector):
-                continue
-
-            base_query = {"knn": {field_name: {"vector": embedding_vector, "k": 50}}}
-            local_knn_without_candidates.append(base_query)
-            if use_num_candidates:
-                with_candidates = copy.deepcopy(base_query)
-                local_knn_with_candidates.append(with_candidates)
-            else:
-                local_knn_with_candidates.append(base_query)
-
-        mode = "knn_hybrid" if local_knn_with_candidates else "text_only"
-        _safe_log(log_fn, f"[HETERO] index={index_name}; mode={mode}; models={available_models}")
-
-        body = build_heterogeneous_search_body(
-            query_text=query_text,
-            filter_clauses=filter_clauses,
-            limit=per_index_limit,
-            score_threshold=score_threshold,
-            knn_queries=local_knn_with_candidates,
-            include_aggs=(idx_num == 0),
+        model_hint = await async_detect_available_models_for_index(client, index_name, filter_clauses)
+        local_knn = mod.knn_queries_for_physical_index(
+            knn_fields, query_embeddings, get_embedding_field_name
         )
+        mode = "knn_hybrid" if local_knn else "text_only"
+        _safe_log(
+            log_fn,
+            f"[HETERO-A] index={index_name}; mode={mode}; agg_models={model_hint}; "
+            f"knn_fields={list(knn_fields.keys())}",
+        )
+        if not q and not local_knn:
+            failure_messages.append(f"{index_name}: skipped (empty query, no KNN fields)")
+            continue
 
+        body = mod.build_heterogeneous_search_body(
+            q,
+            filter_clauses,
+            per_index_limit,
+            score_threshold,
+            local_knn,
+            idx_num == 0,
+        )
         fallback_body: dict[str, Any] | None = None
-        if local_knn_without_candidates and use_num_candidates:
+        if local_knn and use_num_candidates:
             fallback_body = copy.deepcopy(body)
             try:
-                fallback_body["query"]["bool"]["should"][0]["dis_max"]["queries"] = local_knn_without_candidates
+                fallback_body["query"]["bool"]["should"][0]["dis_max"]["queries"] = list(local_knn)
             except (KeyError, IndexError, TypeError):
                 fallback_body = None
 
+        resp: dict[str, Any] | None = None
         try:
             resp = await _maybe_await(
                 client.search(index=index_name, body=body, params={"terminate_after": 0})
@@ -359,39 +369,84 @@ async def async_run_heterogeneous_alias_search(
                     )
                 except Exception as sub_err:
                     logger.warning(
-                        "Heterogeneous sub-search failed after retry for index '%s': %s", index_name, sub_err
+                        "Async per-index search retry failed for '%s': %s", index_name, sub_err
                     )
-                    _safe_log(log_fn, f"[HETERO] index={index_name}; failed={sub_err}")
-                    failed_indices += 1
+                    _safe_log(log_fn, f"[HETERO-A] index={index_name}; num_candidates retry failed={sub_err}")
+                    resp = None
+            if resp is None and local_knn:
+                try:
+                    body_lex = mod.build_heterogeneous_search_body(
+                        q,
+                        filter_clauses,
+                        per_index_limit,
+                        score_threshold,
+                        [],
+                        False,
+                    )
+                    resp = await _maybe_await(
+                        client.search(index=index_name, body=body_lex, params={"terminate_after": 0})
+                    )
+                    _safe_log(log_fn, f"[HETERO-A] index={index_name}; lexical fallback after error={e}")
+                except Exception as lex_e:
+                    msg = f"{index_name}: hybrid_error={e!s}; lexical_fallback={lex_e!s}"
+                    failure_messages.append(msg)
+                    logger.warning("Async per-index search failed for '%s': %s", index_name, msg)
+                    _safe_log(log_fn, f"[HETERO-A] failed {msg}")
                     continue
-            else:
-                logger.warning("Heterogeneous sub-search failed for index '%s': %s", index_name, e)
-                _safe_log(log_fn, f"[HETERO] index={index_name}; failed={e}")
-                failed_indices += 1
+            elif resp is None:
+                msg = f"{index_name}: {e!s}"
+                failure_messages.append(msg)
+                logger.warning("Async per-index search failed for '%s': %s", index_name, e)
+                _safe_log(log_fn, f"[HETERO-A] failed {msg}")
                 continue
         except Exception as e:
-            logger.warning("Heterogeneous sub-search failed for index '%s': %s", index_name, e)
-            _safe_log(log_fn, f"[HETERO] index={index_name}; failed={e}")
-            failed_indices += 1
+            if local_knn:
+                try:
+                    body_lex = mod.build_heterogeneous_search_body(
+                        q,
+                        filter_clauses,
+                        per_index_limit,
+                        score_threshold,
+                        [],
+                        False,
+                    )
+                    resp = await _maybe_await(
+                        client.search(index=index_name, body=body_lex, params={"terminate_after": 0})
+                    )
+                    _safe_log(log_fn, f"[HETERO-A] index={index_name}; lexical fallback after {e!s}")
+                except Exception as lex_e:
+                    msg = f"{index_name}: error={e!s}; lexical_fallback={lex_e!s}"
+                    failure_messages.append(msg)
+                    _safe_log(log_fn, f"[HETERO-A] failed {msg}")
+                    continue
+            else:
+                msg = f"{index_name}: {e!s}"
+                failure_messages.append(msg)
+                _safe_log(log_fn, f"[HETERO-A] failed {msg}")
+                continue
+
+        if resp is None:
             continue
 
         hits = resp.get("hits", {}).get("hits", []) if isinstance(resp, dict) else []
         max_score_index = max((hit.get("_score") or 0.0) for hit in hits) if hits else 0.0
-        _safe_log(log_fn, f"[HETERO] index={index_name}; max_score={max_score_index}; hits={len(hits)}")
+        _safe_log(log_fn, f"[HETERO-A] index={index_name}; max_score={max_score_index}; hits={len(hits)}")
         for hit in hits:
             raw_score = hit.get("_score") or 0.0
             hit["_normalized_score"] = (raw_score / max_score_index) if max_score_index > 0 else 0.0
         per_index_hits.extend(hits)
 
-    _safe_log(log_fn, f"[HETERO] total hits before dedup={len(per_index_hits)}")
-    if failed_indices == len(physical_indices) and physical_indices:
-        _safe_log(log_fn, "[HETERO] all sub-search requests failed")
-    normalized_hits = sum(1 for hit in per_index_hits if "_normalized_score" in hit)
-    _safe_log(log_fn, f"[HETERO] normalized_hits={normalized_hits}")
+    _safe_log(log_fn, f"[HETERO-A] total hits before dedup={len(per_index_hits)}")
+    if not per_index_hits and failure_messages:
+        logger.error(
+            "Async OpenSearch per-index search returned no hits; failures=%s",
+            failure_messages,
+        )
+        _safe_log(log_fn, f"[HETERO-A] complete failure; failures={failure_messages}")
 
     deduped: dict[str, dict[str, Any]] = {}
     for hit in per_index_hits:
-        key = dedup_key_for_hit(hit)
+        key = mod.dedup_key_for_hit(hit)
         existing = deduped.get(key)
         hit_rank = hit.get("_normalized_score", hit.get("_score") or 0.0)
         existing_rank = (
@@ -403,7 +458,7 @@ async def async_run_heterogeneous_alias_search(
     merged_hits = list(deduped.values())
     merged_hits.sort(key=lambda h: h.get("_normalized_score", h.get("_score") or 0.0), reverse=True)
     merged_hits = merged_hits[:limit]
-    _safe_log(log_fn, f"[HETERO] total hits after dedup={len(merged_hits)}")
+    _safe_log(log_fn, f"[HETERO-A] total hits after dedup={len(merged_hits)}")
 
     out: list[MergedHit] = []
     for hit in merged_hits:
@@ -466,131 +521,35 @@ def run_heterogeneous_alias_search(
     get_embedding_field_name: Callable[[str], str],
     log_fn: LogFn | None = None,
 ) -> list[MergedHit]:
-    """Execute per-index search for heterogeneous aliases and merge results.
+    """Execute per-index search behind an alias and merge results (shared with Langflow).
 
-    Notes:
-    - Normalizes `_score` per physical index into `_normalized_score` to make
-      cross-index ranking comparable for heterogeneous mappings.
-    - Dedups across indices and keeps the best hit by normalized score.
-    - Keeps output `score` as raw OpenSearch `_score` (API contract stays external).
+    Delegates to flows/opensearch_alias_search.py for KNN/lexical fallback and mapping-based
+    model selection (no dependency on embedding_model terms agg).
     """
-
-    per_index_hits: list[dict[str, Any]] = []
-    failed_indices = 0
-    per_index_limit = max(limit, limit * 2)
-
-    for idx_num, index_name in enumerate(physical_indices):
-        properties = get_index_properties_for(client, index_name)
-        knn_fields = extract_knn_fields(properties)
-        available_models = detect_available_models_for_index(client, index_name, filter_clauses)
-
-        local_knn_with_candidates: list[dict[str, Any]] = []
-        local_knn_without_candidates: list[dict[str, Any]] = []
-
-        for model_name, embedding_vector in query_embeddings.items():
-            field_name = get_embedding_field_name(model_name)
-            if available_models and model_name not in available_models:
-                continue
-            if field_name not in knn_fields:
-                continue
-            field_dim = knn_fields.get(field_name)
-            if field_dim is not None and field_dim != len(embedding_vector):
-                continue
-
-            base_query = {"knn": {field_name: {"vector": embedding_vector, "k": 50}}}
-            local_knn_without_candidates.append(base_query)
-            # PR-3: keep structure to mirror flow; do not inject num_candidates here.
-            if use_num_candidates:
-                with_candidates = copy.deepcopy(base_query)
-                local_knn_with_candidates.append(with_candidates)
-            else:
-                local_knn_with_candidates.append(base_query)
-
-        mode = "knn_hybrid" if local_knn_with_candidates else "text_only"
-        _safe_log(log_fn, f"[HETERO] index={index_name}; mode={mode}; models={available_models}")
-
-        body = build_heterogeneous_search_body(
-            query_text=query_text,
-            filter_clauses=filter_clauses,
-            limit=per_index_limit,
-            score_threshold=score_threshold,
-            knn_queries=local_knn_with_candidates,
-            include_aggs=(idx_num == 0),
-        )
-
-        fallback_body: dict[str, Any] | None = None
-        if local_knn_without_candidates and use_num_candidates:
-            fallback_body = copy.deepcopy(body)
-            try:
-                fallback_body["query"]["bool"]["should"][0]["dis_max"]["queries"] = local_knn_without_candidates
-            except (KeyError, IndexError, TypeError):
-                fallback_body = None
-
-        try:
-            resp = client.search(index=index_name, body=body, params={"terminate_after": 0})
-        except RequestError as e:
-            lowered = str(e).lower()
-            if fallback_body is not None and "num_candidates" in lowered:
-                try:
-                    resp = client.search(index=index_name, body=fallback_body, params={"terminate_after": 0})
-                except Exception as sub_err:
-                    logger.warning(
-                        "Heterogeneous sub-search failed after retry for index '%s': %s", index_name, sub_err
-                    )
-                    _safe_log(log_fn, f"[HETERO] index={index_name}; failed={sub_err}")
-                    failed_indices += 1
-                    continue
-            else:
-                logger.warning("Heterogeneous sub-search failed for index '%s': %s", index_name, e)
-                _safe_log(log_fn, f"[HETERO] index={index_name}; failed={e}")
-                failed_indices += 1
-                continue
-        except Exception as e:
-            logger.warning("Heterogeneous sub-search failed for index '%s': %s", index_name, e)
-            _safe_log(log_fn, f"[HETERO] index={index_name}; failed={e}")
-            failed_indices += 1
-            continue
-
-        hits = resp.get("hits", {}).get("hits", []) if isinstance(resp, dict) else []
-        max_score_index = max((hit.get("_score") or 0.0) for hit in hits) if hits else 0.0
-        _safe_log(log_fn, f"[HETERO] index={index_name}; max_score={max_score_index}; hits={len(hits)}")
-        for hit in hits:
-            raw_score = hit.get("_score") or 0.0
-            hit["_normalized_score"] = (raw_score / max_score_index) if max_score_index > 0 else 0.0
-        per_index_hits.extend(hits)
-
-    _safe_log(log_fn, f"[HETERO] total hits before dedup={len(per_index_hits)}")
-    if failed_indices == len(physical_indices) and physical_indices:
-        _safe_log(log_fn, "[HETERO] all sub-search requests failed")
-    normalized_hits = sum(1 for hit in per_index_hits if "_normalized_score" in hit)
-    _safe_log(log_fn, f"[HETERO] normalized_hits={normalized_hits}")
-
-    deduped: dict[str, dict[str, Any]] = {}
-    for hit in per_index_hits:
-        key = dedup_key_for_hit(hit)
-        existing = deduped.get(key)
-        hit_rank = hit.get("_normalized_score", hit.get("_score") or 0.0)
-        existing_rank = (
-            existing.get("_normalized_score", existing.get("_score") or 0.0) if existing else None
-        )
-        if existing is None or (existing_rank is not None and hit_rank > existing_rank):
-            deduped[key] = hit
-
-    merged_hits = list(deduped.values())
-    merged_hits.sort(
-        key=lambda h: h.get("_normalized_score", h.get("_score") or 0.0),
-        reverse=True,
+    mod = _get_flows_alias_search_module()
+    rows, failures = mod.run_per_index_merged_search(
+        client=client,
+        query_text=query_text,
+        filter_clauses=filter_clauses,
+        limit=limit,
+        score_threshold=score_threshold,
+        query_embeddings=query_embeddings,
+        physical_indices=physical_indices,
+        get_embedding_field_name=get_embedding_field_name,
+        use_num_candidates=use_num_candidates,
+        num_candidates=num_candidates,
+        log_fn=log_fn,
     )
-    merged_hits = merged_hits[:limit]
-    _safe_log(log_fn, f"[HETERO] total hits after dedup={len(merged_hits)}")
-
-    out: list[MergedHit] = []
-    for hit in merged_hits:
-        src = hit.get("_source", {}) if isinstance(hit, dict) else {}
-        page_content = src.get("text", "") if isinstance(src, dict) else ""
-        metadata = {k: v for k, v in src.items() if k != "text"} if isinstance(src, dict) else {}
-        out.append(MergedHit(page_content=page_content, metadata=metadata, score=hit.get("_score")))
-    return out
+    if not rows and failures:
+        logger.error(
+            "OpenSearch per-index search returned no hits; failures=%s",
+            failures,
+        )
+        _safe_log(log_fn, f"[HETERO] complete failure; failures={failures}")
+    return [
+        MergedHit(page_content=r["page_content"], metadata=r["metadata"], score=r["score"])
+        for r in rows
+    ]
 
 
 def search(
