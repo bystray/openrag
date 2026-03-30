@@ -1,19 +1,18 @@
 """
 Shared OpenSearch filter clauses for Knowledge search and Langflow chat/nudges.
 
-Field names match `create_dynamic_index_body` in utils/embeddings.py: filename,
-mimetype, owner, connector_type are mapped as **keyword** (no `.keyword` subfield).
-Using `field.keyword` on those indices causes "field not found" and breaks search.
+document_types maps to mimetype.keyword so term/terms hit the keyword subfield of
+text-mapped mimetype. Other keys: see EXACT_FILTER_FIELD_MAPPING.
 """
 
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-# Frontend filter keys -> OpenSearch field names (keyword-typed in standard index)
+# Frontend filter keys -> OpenSearch field names for exact term/terms
 EXACT_FILTER_FIELD_MAPPING = {
     "data_sources": "filename",
-    "document_types": "mimetype",
+    "document_types": "mimetype.keyword",
     "owners": "owner",
     "connector_types": "connector_type",
 }

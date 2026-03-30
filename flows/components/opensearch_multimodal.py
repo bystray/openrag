@@ -33,6 +33,7 @@ from lfx.schema.data import Data
 _FLOWS_ROOT = Path(__file__).resolve().parents[1]
 if str(_FLOWS_ROOT) not in sys.path:
     sys.path.insert(0, str(_FLOWS_ROOT))
+import chunk_text_filters as _chunk_text_filters
 import opensearch_alias_search as _openrag_alias_search
 
 
@@ -70,6 +71,28 @@ def get_embedding_field_name(model_name: str) -> str:
     """
     logger.info(f"chunk_embedding_{normalize_model_name(model_name)}")
     return f"chunk_embedding_{normalize_model_name(model_name)}"
+
+
+# `term` / `terms` must target the keyword subfield for mapped `text` fields (not `embedding_model`, which is keyword).
+_EXACT_TERM_TEXT_FIELDS = frozenset(
+    {
+        "connector_type",
+        "content_type",
+        "description",
+        "document_id",
+        "file_size",
+        "filename",
+        "language",
+        "mimetype",
+        "owner",
+        "owner_email",
+        "owner_name",
+        "source_url",
+        "text",
+        "title",
+        "url",
+    }
+)
 
 
 @vector_store_connection
@@ -1240,6 +1263,41 @@ class OpenSearchVectorStoreComponentMultimodalMultiEmbedding(LCVectorStoreCompon
         # term_obj like {"filename": "__IMPOSSIBLE_VALUE__"}
         return any(v == "__IMPOSSIBLE_VALUE__" for v in term_obj.values())
 
+    def _exact_filter_field_name(self, field: str) -> str:
+        if field.endswith(".keyword"):
+            return field
+        if field in _EXACT_TERM_TEXT_FIELDS:
+            return f"{field}.keyword"
+        return field
+
+    def _normalize_filter_clause_for_exact_match(self, clause: dict) -> dict:
+        """Rewrite term/terms field names to *.keyword where the index uses text+keyword."""
+        if not isinstance(clause, dict):
+            return clause
+        if "term" in clause and isinstance(clause["term"], dict) and len(clause["term"]) == 1:
+            field, val = next(iter(clause["term"].items()))
+            new_field = self._exact_filter_field_name(field)
+            return {"term": {new_field: val}}
+        if "terms" in clause and isinstance(clause["terms"], dict) and len(clause["terms"]) == 1:
+            field, vals = next(iter(clause["terms"].items()))
+            new_field = self._exact_filter_field_name(field)
+            return {"terms": {new_field: vals}}
+        if "bool" in clause and isinstance(clause["bool"], dict):
+            b = clause["bool"]
+            new_b: dict[str, Any] = {}
+            for k, v in b.items():
+                if k in ("must", "should", "filter", "must_not") and isinstance(v, list):
+                    new_b[k] = [
+                        self._normalize_filter_clause_for_exact_match(item) if isinstance(item, dict) else item
+                        for item in v
+                    ]
+                elif k in ("must", "should", "filter", "must_not") and isinstance(v, dict):
+                    new_b[k] = self._normalize_filter_clause_for_exact_match(v)
+                else:
+                    new_b[k] = v
+            return {"bool": new_b}
+        return clause
+
     def _coerce_filter_clauses(self, filter_obj: dict | None) -> list[dict]:
         """Convert filter expressions into OpenSearch-compatible filter clauses.
 
@@ -1278,12 +1336,16 @@ class OpenSearchVectorStoreComponentMultimodalMultiEmbedding(LCVectorStoreCompon
                 raw = [raw]
             explicit_clauses: list[dict] = []
             for f in raw or []:
-                if "term" in f and isinstance(f["term"], dict) and not self._is_placeholder_term(f["term"]):
-                    explicit_clauses.append(f)
+                if not isinstance(f, dict):
+                    continue
+                if "bool" in f and isinstance(f.get("bool"), dict):
+                    explicit_clauses.append(self._normalize_filter_clause_for_exact_match(f))
+                elif "term" in f and isinstance(f["term"], dict) and not self._is_placeholder_term(f["term"]):
+                    explicit_clauses.append(self._normalize_filter_clause_for_exact_match(f))
                 elif "terms" in f and isinstance(f["terms"], dict):
                     field, vals = next(iter(f["terms"].items()))
                     if isinstance(vals, list) and len(vals) > 0:
-                        explicit_clauses.append(f)
+                        explicit_clauses.append(self._normalize_filter_clause_for_exact_match(f))
             return explicit_clauses
 
         # Case B: convert context-style maps into clauses
@@ -1296,7 +1358,7 @@ class OpenSearchVectorStoreComponentMultimodalMultiEmbedding(LCVectorStoreCompon
         for k, values in filter_obj.items():
             if not isinstance(values, list):
                 continue
-            field = field_mapping.get(k, k)
+            field = self._exact_filter_field_name(field_mapping.get(k, k))
             if len(values) == 0:
                 # Match-nothing placeholder (kept to mirror your tool semantics)
                 context_clauses.append({"term": {field: "__IMPOSSIBLE_VALUE__"}})
@@ -1818,14 +1880,16 @@ class OpenSearchVectorStoreComponentMultimodalMultiEmbedding(LCVectorStoreCompon
                         ensure_ascii=False,
                     )
                 )
-            return [
-                {
-                    "page_content": r["page_content"],
-                    "metadata": r["metadata"],
-                    "score": r["score"],
-                }
-                for r in results
-            ]
+            return _chunk_text_filters.filter_search_results_for_llm(
+                [
+                    {
+                        "page_content": r["page_content"],
+                        "metadata": r["metadata"],
+                        "score": r["score"],
+                    }
+                    for r in results
+                ]
+            )
 
         index_properties = self._get_index_properties(client)
         legacy_vector_field = getattr(self, "vector_field", "chunk_embedding")
@@ -2009,14 +2073,16 @@ class OpenSearchVectorStoreComponentMultimodalMultiEmbedding(LCVectorStoreCompon
             resp = run_keyword_fallback("no valid knn_vector fields available")
             hits = resp.get("hits", {}).get("hits", [])
             logger.info(f"Found {len(hits)} results (keyword fallback)")
-            return [
-                {
-                    "page_content": hit["_source"].get("text", ""),
-                    "metadata": {k: v for k, v in hit["_source"].items() if k != "text"},
-                    "score": hit.get("_score"),
-                }
-                for hit in hits
-            ]
+            return _chunk_text_filters.filter_search_results_for_llm(
+                [
+                    {
+                        "page_content": hit["_source"].get("text", ""),
+                        "metadata": {k: v for k, v in hit["_source"].items() if k != "text"},
+                        "score": hit.get("_score"),
+                    }
+                    for hit in hits
+                ]
+            )
 
         # Detect heterogeneous alias topology (alias -> multiple physical indices).
         # In this case, global exists(field=embedding_*) filter can suppress valid
@@ -2146,14 +2212,16 @@ class OpenSearchVectorStoreComponentMultimodalMultiEmbedding(LCVectorStoreCompon
                 f"filters={len(filter_clauses)} clauses"
             )
 
-        return [
-            {
-                "page_content": hit["_source"].get("text", ""),
-                "metadata": {k: v for k, v in hit["_source"].items() if k != "text"},
-                "score": hit.get("_score"),
-            }
-            for hit in hits
-        ]
+        return _chunk_text_filters.filter_search_results_for_llm(
+            [
+                {
+                    "page_content": hit["_source"].get("text", ""),
+                    "metadata": {k: v for k, v in hit["_source"].items() if k != "text"},
+                    "score": hit.get("_score"),
+                }
+                for hit in hits
+            ]
+        )
 
     def search_documents(self) -> list[Data]:
         """Search documents and return results as Data objects.
