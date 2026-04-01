@@ -164,6 +164,7 @@ async def create_dynamic_index_body(
             "properties": {
                 "document_id": {"type": "keyword"},
                 "filename": {"type": "keyword"},
+                "document_path": {"type": "keyword"},
                 "mimetype": {"type": "keyword"},
                 "page": {"type": "integer"},
                 "text": {"type": "text"},

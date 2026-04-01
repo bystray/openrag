@@ -22,6 +22,7 @@ class FileTask:
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     filename: Optional[str] = None  # Original filename for display
+    relative_path: Optional[str] = None
 
     @property
     def duration_seconds(self) -> float:

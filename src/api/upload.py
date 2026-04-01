@@ -15,6 +15,7 @@ from dependencies import (
     get_current_user,
 )
 from session_manager import User
+from utils.file_utils import normalize_path as normalize_file_path
 
 
 class UploadPathBody(BaseModel):
@@ -23,6 +24,11 @@ class UploadPathBody(BaseModel):
 
 class UploadBucketBody(BaseModel):
     s3_url: str
+
+
+def normalize_path(path: str) -> str:
+    """Normalize folder-upload paths for relative_path tracking."""
+    return normalize_file_path(path)
 
 
 async def upload(
@@ -74,9 +80,19 @@ async def upload_path(
     if not body.path or not os.path.isdir(body.path):
         return JSONResponse({"error": "Invalid path"}, status_code=400)
 
-    file_paths = [
-        os.path.join(root, fn) for root, _, files in os.walk(body.path) for fn in files
-    ]
+    root_dir = os.path.abspath(body.path)
+    root_name = os.path.basename(root_dir.rstrip(os.sep))
+    file_paths = []
+    relative_paths = {}
+    for root, _, files in os.walk(root_dir):
+        for filename in files:
+            abs_file_path = os.path.join(root, filename)
+            rel_to_root = os.path.relpath(abs_file_path, root_dir)
+            relative_path = normalize_path(
+                os.path.join(root_name, rel_to_root) if root_name else rel_to_root
+            )
+            file_paths.append(abs_file_path)
+            relative_paths[abs_file_path] = relative_path
 
     if not file_paths:
         return JSONResponse({"error": "No files found in directory"}, status_code=400)
@@ -100,6 +116,7 @@ async def upload_path(
     task_id = await task_service.create_upload_task(
         owner_user_id,
         file_paths,
+        relative_paths=relative_paths,
         jwt_token=jwt_token,
         owner_name=owner_name,
         owner_email=owner_email,

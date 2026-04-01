@@ -5,6 +5,7 @@ from utils.file_utils import (
     clean_connector_filename,
     get_file_extension,
     make_safe_storage_filename,
+    normalize_path,
 )
 
 logger = get_logger(__name__)
@@ -124,6 +125,65 @@ class TaskProcessor:
                     await asyncio.sleep(retry_delay)
                     retry_delay *= 2  # Exponential backoff
 
+    async def check_document_path_exists(
+        self,
+        document_path: str,
+        opensearch_client,
+        owner_user_id: str | None = None,
+        connector_type: str | None = None,
+    ) -> bool:
+        """
+        Check if a document with the given document_path already exists.
+        Returns True if any chunks with this document_path exist.
+        """
+        from config.settings import get_index_name
+        import asyncio
+
+        max_retries = 3
+        retry_delay = 1.0
+        filter_clauses = [{"term": {"document_path": document_path}}]
+        if owner_user_id is not None:
+            filter_clauses.append({"term": {"owner": owner_user_id}})
+        if connector_type:
+            filter_clauses.append({"term": {"connector_type": connector_type}})
+
+        search_body = {
+            "query": {"bool": {"filter": filter_clauses}},
+            "size": 1,
+            "_source": False,
+        }
+
+        for attempt in range(max_retries):
+            try:
+                response = await opensearch_client.search(
+                    index=get_index_name(),
+                    body=search_body,
+                )
+                hits = response.get("hits", {}).get("hits", [])
+                return len(hits) > 0
+            except (asyncio.TimeoutError, Exception) as e:
+                if attempt == max_retries - 1:
+                    logger.error(
+                        "OpenSearch document_path check failed after retries",
+                        document_path=document_path,
+                        error=str(e),
+                        attempt=attempt + 1,
+                    )
+                    logger.warning(
+                        "Assuming document_path doesn't exist due to connection issues",
+                        document_path=document_path,
+                    )
+                    return False
+                logger.warning(
+                    "OpenSearch document_path check failed, retrying",
+                    document_path=document_path,
+                    error=str(e),
+                    attempt=attempt + 1,
+                    retry_in=retry_delay,
+                )
+                await asyncio.sleep(retry_delay)
+                retry_delay *= 2
+
     async def delete_document_by_filename(
         self,
         filename: str,
@@ -165,6 +225,7 @@ class TaskProcessor:
         file_hash: str,
         owner_user_id: str = None,
         original_filename: str = None,
+        relative_path: str | None = None,
         jwt_token: str = None,
         owner_name: str = None,
         owner_email: str = None,
@@ -184,6 +245,7 @@ class TaskProcessor:
             acl: DocumentACL instance with access control information
         """
         import datetime
+        import os
         from config.settings import (
             clients,
             get_embedding_model,
@@ -211,9 +273,23 @@ class TaskProcessor:
             owner_user_id, jwt_token
         )
 
-        # Check if already exists
-        if await self.check_document_exists(file_hash, opensearch_client):
-            return {"status": "unchanged", "id": file_hash}
+        fallback_filename = original_filename if original_filename else os.path.basename(file_path)
+        document_path = normalize_path(relative_path) if relative_path else fallback_filename
+        document_identity = document_path if relative_path else file_hash
+
+        # Check if already exists.
+        # If relative_path is provided (folder upload), deduplicate by document_path.
+        if relative_path:
+            if await self.check_document_path_exists(
+                document_path,
+                opensearch_client,
+                owner_user_id=owner_user_id,
+                connector_type=connector_type,
+            ):
+                return {"status": "unchanged", "id": document_identity}
+        else:
+            if await self.check_document_exists(file_hash, opensearch_client):
+                return {"status": "unchanged", "id": file_hash}
 
         index_name = get_index_name_for_model(embedding_model)
 
@@ -224,6 +300,10 @@ class TaskProcessor:
         embedding_field_name = await ensure_embedding_field_exists(
             opensearch_client, embedding_model, index_name
         )
+        await opensearch_client.indices.put_mapping(
+            index=index_name,
+            body={"properties": {"document_path": {"type": "keyword"}}},
+        )
 
         logger.info(
             "Processing document with embedding model",
@@ -233,7 +313,6 @@ class TaskProcessor:
         )
 
         # Check if this is a .txt or .md file - use simple processing instead of docling
-        import os
         file_ext = os.path.splitext(file_path)[1].lower()
         
         if file_ext in ('.txt', '.md'):
@@ -283,10 +362,11 @@ class TaskProcessor:
             raise RuntimeError("Embedding generation produced no valid vectors")
         for i, chunk, vect in chunks_with_vectors:
             chunk_doc = {
-                "document_id": file_hash,
+                "document_id": document_identity,
                 "filename": original_filename
                 if original_filename
                 else slim_doc["filename"],
+                "document_path": document_path,
                 "mimetype": slim_doc["mimetype"],
                 "page": chunk["page"],
                 "text": chunk["text"],
@@ -322,7 +402,7 @@ class TaskProcessor:
             # Mark as sample data if specified
             if is_sample_data:
                 chunk_doc["is_sample_data"] = "true"
-            chunk_id = f"{file_hash}_{i}"
+            chunk_id = f"{document_identity}_{i}"
             try:
                 await opensearch_client.index(
                     index=index_name, id=chunk_id, body=chunk_doc
@@ -335,7 +415,7 @@ class TaskProcessor:
                 )
                 logger.error("Chunk document details", chunk_doc=chunk_doc)
                 raise
-        return {"status": "indexed", "id": file_hash}
+        return {"status": "indexed", "id": document_identity}
 
     async def process_item(
         self, upload_task: UploadTask, item: Any, file_task: FileTask
@@ -407,6 +487,7 @@ class DocumentFileProcessor(TaskProcessor):
                 file_hash=file_hash,
                 owner_user_id=self.owner_user_id,
                 original_filename=os.path.basename(item),
+                relative_path=file_task.relative_path,
                 jwt_token=self.jwt_token,
                 owner_name=self.owner_name,
                 owner_email=self.owner_email,

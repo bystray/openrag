@@ -63,6 +63,18 @@ def safe_unlink(path: str) -> None:
         pass
 
 
+def normalize_path(path: str) -> str:
+    """Normalize path separators and duplicate/trailing markers."""
+    normalized = (path or "").replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    while "//" in normalized:
+        normalized = normalized.replace("//", "/")
+    if normalized.endswith("/") and normalized != "/":
+        normalized = normalized.rstrip("/")
+    return normalized
+
+
 def get_file_extension(mimetype: str) -> str:
     """Get file extension based on MIME type"""
     mime_to_ext = {

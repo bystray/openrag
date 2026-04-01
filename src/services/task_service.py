@@ -105,6 +105,7 @@ class TaskService:
         self,
         user_id: str,
         file_paths: list,
+        relative_paths: dict | None = None,
         jwt_token: str = None,
         owner_name: str = None,
         owner_email: str = None,
@@ -120,7 +121,9 @@ class TaskService:
             owner_name=owner_name,
             owner_email=owner_email,
         )
-        return await self.create_custom_task(user_id, file_paths, processor)
+        return await self.create_custom_task(
+            user_id, file_paths, processor, relative_paths=relative_paths
+        )
 
     async def create_langflow_upload_task(
         self,
@@ -189,7 +192,14 @@ class TaskService:
         )
         return await self.create_custom_task(owner_user_id, [docs_url], processor)
 
-    async def create_custom_task(self, user_id: str, items: list, processor, original_filenames: dict | None = None) -> str:
+    async def create_custom_task(
+        self,
+        user_id: str,
+        items: list,
+        processor,
+        original_filenames: dict | None = None,
+        relative_paths: dict | None = None,
+    ) -> str:
         """Create a new task with custom processor for any type of items"""
         import os
         # Store anonymous tasks under a stable key so they can be retrieved later
@@ -200,12 +210,16 @@ class TaskService:
         normalized_originals = (
             {str(k): v for k, v in original_filenames.items()} if original_filenames else {}
         )
+        normalized_relative_paths = (
+            {str(k): v for k, v in relative_paths.items()} if relative_paths else {}
+        )
         file_tasks = {
             str(item): FileTask(
                 file_path=str(item),
                 filename=normalized_originals.get(
                     str(item), os.path.basename(str(item))
                 ),
+                relative_path=normalized_relative_paths.get(str(item)),
             )
             for item in items
         }
@@ -555,6 +569,7 @@ class TaskService:
                 "updated_at": file_task.updated_at,
                 "duration_seconds": file_task.duration_seconds,
                 "filename": file_task.filename,
+                "relative_path": file_task.relative_path,
             }
 
             # Count running and pending files
@@ -610,6 +625,7 @@ class TaskService:
                             "updated_at": file_task.updated_at,
                             "duration_seconds": file_task.duration_seconds,
                             "filename": file_task.filename,
+                            "relative_path": file_task.relative_path,
                         }
 
                     if file_task.status.value == "running":
